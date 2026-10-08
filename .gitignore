@@ -1,6 +1,6 @@
 # Intellij
 .idea/
-,kotlin/
+.kotlin/
 build/
 *.iml
 *.iws
