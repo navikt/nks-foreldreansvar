@@ -1,17 +1,22 @@
 # nks-foreldreansvar
 
-A Kotlin application using http4k and Netty, following the stack used by `sf-pubsub`: Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter, and Shadow.
+A Kotlin application using [Ktor](https://ktor.io) with the Netty engine. It uses Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter and Shadow.
 
-The existing Hello Nais page shows a counter you can increment with a button. The count lives in memory, is separate for each application instance, and resets when the app restarts.
+For now the app only exposes the health endpoints Nais needs. Auth, PDL, Kafka, configuration and observability will be added later.
+
+### Why Ktor and Jackson?
+
+- **Ktor** is a lightweight Kotlin web framework that is widely used in Nav. An app is built from a `module()` function, where you install *plugins* (such as JSON and later auth) and define routes.
+- **Jackson** (`ktor-serialization-jackson`) converts between JSON and Kotlin classes. It is the most common choice in Nav libraries and examples, and it works with ordinary `data class`es without extra annotations or compiler plugins.
 
 ## Structure
 
 ```text
 src/main/kotlin/no/nav/nks/foreldreansvar/
-  Bootstrap.kt       Server startup and shutdown
-  Application.kt     HTTP routes and in-memory counter
-src/main/resources/  Page and logo
-src/test/kotlin/     HTTP handler tests
+  Bootstrap.kt       main(): starts the Netty server on port 8080
+  Application.kt     Application.module(): installs plugins (JSON) and routes
+  InternalRoutes.kt  /internal/isalive and /internal/isready
+src/test/kotlin/     Tests using ktor-server-test-host
 .nais/app.yaml       Nais deployment configuration
 ```
 
@@ -21,9 +26,11 @@ With Java 17 or newer installed to run Gradle 9 (the Gradle wrapper downloads Gr
 
 ```sh
 ./gradlew run
+curl http://localhost:8080/internal/isalive
+curl http://localhost:8080/internal/isready
 ```
 
-Open http://localhost:8080 and click the button. The health endpoint is `GET /healthz`.
+> Gradle 8.11 cannot run on Java 25. If you have several JDKs installed, point `JAVA_HOME` to Java 21.
 
 ```sh
 ./gradlew check
@@ -47,4 +54,4 @@ docker run --rm -p 8080:8080 nks-foreldreansvar
 
 The multi-stage build runs checks and packages the application and resources into an executable JAR. The final image uses distroless Java 21 and runs as a non-root user.
 
-Pushes to `main` build and publish the Docker image, then deploy using `.nais/app.yaml`. Both Nais health probes use `/healthz`.
+Pushes to `main` build and publish the Docker image, then deploy using `.nais/app.yaml`. Nais uses `/internal/isalive` (liveness) and `/internal/isready` (readiness) as health probes.
