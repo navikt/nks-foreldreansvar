@@ -17,6 +17,9 @@ spec:
     max: 4
     min: 1
   resources:
+    limits:
+        cpu: 96Mi
+        memory: 128Mi
     requests:
       cpu: 50m
       memory: 256Mi
