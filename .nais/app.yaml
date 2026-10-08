@@ -13,7 +13,6 @@ spec:
   readiness:
     path: /healthz
     initialDelay: 10
-  ttl: 3h # Time before clean-up (1)
   replicas:
     max: 4
     min: 1
