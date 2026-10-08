@@ -1,0 +1,16 @@
+apiVersion: nais.io/v1alpha1
+kind: Application
+metadata:
+  name: nks-foreldreansvar
+spec:
+  ingresses:
+    - https://nks-foreldreansvar.intern.dev.nav.no.nav.cloud.nais.io
+  port: 8080
+  ttl: 3h # Time before clean-up (1)
+  replicas:
+    max: 1
+    min: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
