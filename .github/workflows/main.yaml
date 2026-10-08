@@ -36,6 +36,6 @@ jobs:
         run: |
           # Select the Nais environment. (2)
           nais apply .nais/app.yaml \
-            --environment intern.dev.nav.no \
+            --environment dev-gcp \
             --set spec.image="${{ needs.build.outputs.image }}" \
             --wait
