@@ -1,0 +1,30 @@
+# Intellij
+.idea/
+,kotlin/
+build/
+*.iml
+*.iws
+local.properties
+
+# Mac
+.DS_Store
+
+# Maven
+log/
+target/
+
+# Gradle
+.gradle/
+out/
+logbody*
+Scratch*
+arguments*
+/src/main/kotlin/no/nav/sf/pubsub/reference/
+/src/test/resources/local.env
+
+# misc
+.*.sw?
+*.vim
+TAGS
+tags
+Makefile
