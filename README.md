@@ -1,28 +1,50 @@
-# Hello Nais
+# nks-foreldreansvar
 
-A tiny Go application for the [Hello Nais tutorial](https://doc.nais.io/tutorials/hello-nais/). It shows a counter you can increment with a button. For now, the count lives in memory and resets when the app restarts. A later exercise can move the count to Postgres and make that difference visible.
+A Kotlin application using http4k and Netty, following the stack used by `sf-pubsub`: Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter, and Shadow.
 
-This template contains the application and its Dockerfile. You create the Nais manifest and GitHub Actions workflow yourself in the tutorial.
+The existing Hello Nais page shows a counter you can increment with a button. The count lives in memory, is separate for each application instance, and resets when the app restarts.
+
+## Structure
+
+```text
+src/main/kotlin/no/nav/nks/foreldreansvar/
+  Bootstrap.kt       Server startup and shutdown
+  Application.kt     HTTP routes and in-memory counter
+src/main/resources/  Page and logo
+src/test/kotlin/     HTTP handler tests
+.nais/app.yaml       Nais deployment configuration
+```
 
 ## Run locally
 
-With Go 1.27 or newer:
+With Java 21 installed (the Gradle wrapper downloads Gradle automatically):
 
 ```sh
-go run .
+./gradlew run
 ```
 
 Open http://localhost:8080 and click the button. The health endpoint is `GET /healthz`.
 
 ```sh
-go test ./...
+./gradlew check
+```
+
+`check` runs tests and Kotlin lint checks. Use `./gradlew formatKotlin` to format Kotlin sources.
+
+## Build an executable JAR
+
+```sh
+./gradlew shadowJar
+java -jar build/libs/app.jar
 ```
 
 ## Run in Docker
 
 ```sh
-docker build -t hello .
-docker run --rm -p 8080:8080 hello
+docker build -t nks-foreldreansvar .
+docker run --rm -p 8080:8080 nks-foreldreansvar
 ```
 
-The final image is `scratch`: it contains only the statically linked application binary (including the page and logo) and runs as a non-root user.
+The multi-stage build runs checks and packages the application and resources into an executable JAR. The final image uses distroless Java 21 and runs as a non-root user.
+
+Pushes to `main` build and publish the Docker image, then deploy using `.nais/app.yaml`. Both Nais health probes use `/healthz`.

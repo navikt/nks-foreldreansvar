@@ -1,10 +1,11 @@
-FROM golang:1.27-alpine AS build
-WORKDIR /src
-COPY go.mod main.go index.html logo.svg ./
-RUN CGO_ENABLED=0 go build -trimpath -o /hello .
+FROM eclipse-temurin:21-jdk AS build
+WORKDIR /app
+COPY gradlew build.gradle settings.gradle ./
+COPY gradle ./gradle
+COPY src ./src
+RUN ./gradlew --no-daemon check shadowJar
 
-FROM scratch
-COPY --from=build /hello /hello
-USER 65532:65532
+FROM gcr.io/distroless/java21:nonroot
+COPY --from=build /app/build/libs/app.jar /app.jar
 EXPOSE 8080
-ENTRYPOINT ["/hello"]
+ENTRYPOINT ["java", "-jar", "/app.jar"]

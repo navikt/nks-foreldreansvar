@@ -7,6 +7,12 @@ spec:
   ingresses:
     - https://nks-foreldreansvar.intern.dev.nav.no
   port: 8080
+  liveness:
+    path: /healthz
+    initialDelay: 10
+  readiness:
+    path: /healthz
+    initialDelay: 10
   ttl: 3h # Time before clean-up (1)
   replicas:
     max: 4
@@ -14,4 +20,4 @@ spec:
   resources:
     requests:
       cpu: 50m
-      memory: 32Mi
+      memory: 256Mi
