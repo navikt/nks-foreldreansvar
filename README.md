@@ -30,8 +30,6 @@ curl http://localhost:8080/internal/isalive
 curl http://localhost:8080/internal/isready
 ```
 
-> Gradle 8.11 cannot run on Java 25. If you have several JDKs installed, point `JAVA_HOME` to Java 21.
-
 ```sh
 ./gradlew check
 ```
