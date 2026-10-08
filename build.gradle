@@ -1,8 +1,8 @@
 plugins {
     id 'application'
     id 'org.jetbrains.kotlin.jvm' version '2.4.10'
-    id 'org.jmailen.kotlinter' version '5.2.0'
-    id 'com.gradleup.shadow' version '8.3.1'
+    id 'org.jmailen.kotlinter' version '5.7.0'
+    id 'com.gradleup.shadow' version '9.6.1'
 }
 
 group = 'no.nav.nks.foreldreansvar'
@@ -37,4 +37,8 @@ tasks.named('test') {
 tasks.named('shadowJar') {
     archiveFileName = 'app.jar'
     mergeServiceFiles()
+    // Shadow 9 excludes duplicates by default; include files that transformers must merge.
+    filesMatching(['META-INF/services/**', 'META-INF/*.kotlin_module']) {
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    }
 }

@@ -17,7 +17,7 @@ src/test/kotlin/     HTTP handler tests
 
 ## Run locally
 
-With Java 21 installed (the Gradle wrapper downloads Gradle automatically):
+With Java 17 or newer installed to run Gradle 9 (the Gradle wrapper downloads Gradle automatically). The app compiles with a Java 21 toolchain; if Java 21 is not installed, Gradle downloads it automatically:
 
 ```sh
 ./gradlew run
