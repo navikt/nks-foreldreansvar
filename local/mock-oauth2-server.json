@@ -1,0 +1,21 @@
+{
+  "interactiveLogin": false,
+  "tokenCallbacks": [
+    {
+      "issuerId": "azuread",
+      "requestMappings": [
+        {
+          "requestParam": "client_id",
+          "match": "salesforce-local",
+          "claims": {
+            "sub": "salesforce-local",
+            "aud": ["nks-foreldreansvar-local"],
+            "azp": "salesforce-local",
+            "idtyp": "app",
+            "roles": ["access_as_application"]
+          }
+        }
+      ]
+    }
+  ]
+}
