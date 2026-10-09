@@ -22,3 +22,14 @@ spec:
     requests:
       cpu: 50m
       memory: 96Mi
+  azure:
+    application:
+      enabled: true
+      tenant: trygdeetaten.no # Entra ID dev tenant
+  accessPolicy:
+    inbound:
+      rules:
+        # Salesforce (teamcrm), same as sf-pdfgen and saas-proxy. To be verified when the callout from Salesforce is set up.
+        - application: salesforce
+          namespace: teamcrm
+          cluster: dev-external

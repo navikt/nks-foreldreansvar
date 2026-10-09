@@ -1,9 +1,10 @@
 package no.nav.nks.foreldreansvar
 
-import io.ktor.server.application.Application
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 
 fun main() {
-    embeddedServer(Netty, port = 8080, module = Application::module).start(wait = true)
+    // Read config before starting the server so a missing variable stops the app immediately.
+    val azureConfig = AzureConfig.fromEnv()
+    embeddedServer(Netty, port = 8080) { module(azureConfig) }.start(wait = true)
 }
