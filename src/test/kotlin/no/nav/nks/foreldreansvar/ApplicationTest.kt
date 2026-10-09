@@ -8,10 +8,19 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
 class ApplicationTest {
+    // JWKS is only fetched when a token is validated, so dummy values are enough here.
+    private val dummyAzureConfig =
+        AzureConfig(
+            clientId = "client-id",
+            issuer = "http://localhost/issuer",
+            jwksUri = "http://localhost/jwks",
+            preAuthorizedClientIds = emptySet(),
+        )
+
     @Test
     fun `isalive returns OK`() =
         testApplication {
-            application { module() }
+            application { module(dummyAzureConfig) }
 
             val response = client.get("/internal/isalive")
 
@@ -22,7 +31,7 @@ class ApplicationTest {
     @Test
     fun `isready returns OK`() =
         testApplication {
-            application { module() }
+            application { module(dummyAzureConfig) }
 
             val response = client.get("/internal/isready")
 
@@ -33,7 +42,7 @@ class ApplicationTest {
     @Test
     fun `unknown paths return not found`() =
         testApplication {
-            application { module() }
+            application { module(dummyAzureConfig) }
 
             assertEquals(HttpStatusCode.NotFound, client.get("/").status)
             assertEquals(HttpStatusCode.NotFound, client.get("/healthz").status)
