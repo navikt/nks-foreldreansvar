@@ -8,10 +8,10 @@ spec:
     - https://nks-foreldreansvar.intern.dev.nav.no
   port: 8080
   liveness:
-    path: /healthz
+    path: /internal/isalive
     initialDelay: 10
   readiness:
-    path: /healthz
+    path: /internal/isready
     initialDelay: 10
   replicas:
     max: 4
