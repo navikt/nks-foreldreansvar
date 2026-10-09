@@ -29,9 +29,7 @@ spec:
   accessPolicy:
     inbound:
       rules:
-        # TODO: Replace with the Salesforce app registration once confirmed.
-        # Other Nav Salesforce integrations (e.g. sf-pdfgen, saas-proxy) use
-        # application: salesforce, namespace: teamcrm, cluster: dev-external
-        - application: todo-salesforce-application
-          namespace: todo-salesforce-namespace
-          cluster: todo-salesforce-cluster
+        # Salesforce (teamcrm), same as sf-pdfgen and saas-proxy. To be verified when the callout from Salesforce is set up.
+        - application: salesforce
+          namespace: teamcrm
+          cluster: dev-external

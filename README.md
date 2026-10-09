@@ -41,7 +41,7 @@ Salesforce calls this app machine-to-machine (no user involved). It gets an acce
 
 `accessPolicy.inbound` says who may call us. Entra ID refuses to issue tokens for our app to anyone not listed there.
 
-> **TODO:** The Salesforce rule in `.nais/app.yaml` is a placeholder (`todo-salesforce-*`) until we have confirmed which app registration Salesforce uses. Other Nav Salesforce integrations use `application: salesforce`, `namespace: teamcrm`, `cluster: dev-external`. Until then no one can get a token for this app in dev.
+> **Note:** The inbound rule allows `application: salesforce`, `namespace: teamcrm`, `cluster: dev-external`, the same registration other Nav Salesforce integrations (sf-pdfgen, saas-proxy) use. It will be verified when the callout from Salesforce is set up.
 
 ### What the app checks
 
