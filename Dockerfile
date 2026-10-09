@@ -6,6 +6,8 @@ COPY src ./src
 RUN ./gradlew --no-daemon check shadowJar
 
 FROM gcr.io/distroless/java21:nonroot
-COPY --from=build /app/build/libs/app.jar /app.jar
+# Ktor resolves the working directory at startup and crashes if it doesn't exist.
+WORKDIR /app
+COPY --from=build /app/build/libs/app.jar /app/app.jar
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "/app.jar"]
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
