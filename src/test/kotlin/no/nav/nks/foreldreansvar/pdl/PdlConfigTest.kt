@@ -10,7 +10,7 @@ class PdlConfigTest {
         mapOf(
             "PDL_URL" to "https://pdl.example/graphql",
             "PDL_TARGET" to "dev-fss:pdl:pdl-api",
-            "PDL_BEHANDLINGSNUMMER" to "B530",
+            "PDL_BEHANDLINGSNUMMER" to "B118",
             "NAIS_TOKEN_ENDPOINT" to "http://texas/api/v1/token",
         )
 
@@ -20,7 +20,7 @@ class PdlConfigTest {
             PdlConfig(
                 url = "https://pdl.example/graphql",
                 target = "dev-fss:pdl:pdl-api",
-                behandlingsnummer = "B530",
+                behandlingsnummer = "B118",
                 tokenEndpoint = "http://texas/api/v1/token",
             ),
             PdlConfig.fromEnv(env),

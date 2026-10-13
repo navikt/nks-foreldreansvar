@@ -106,7 +106,7 @@ Why Texas instead of calling Entra ID ourselves: Texas holds the client credenti
 ### Network and access
 
 - PDL runs in dev-fss (on-prem). From dev-gcp we reach it through `https://pdl-api.dev-fss-pub.nais.io/graphql`, which is allowed with `accessPolicy.outbound.external` in `.nais/app.yaml`. `outbound.rules` only covers apps in the same GCP environment, so no rule is needed.
-- Each request sends the header `Behandlingsnummer: B530`, the registered purpose for our lookups.
+- Each request sends the header `Behandlingsnummer: B118`, the registered purpose for our lookups.
 - PDL must also grant our app access (behandlingsnummer and their own access list). That is a manual request to the PDL team, not something this repo controls. Until it is done, PDL answers `unauthorized`.
 
 ### Environment variables
@@ -115,7 +115,7 @@ Why Texas instead of calling Entra ID ourselves: Texas holds the client credenti
 | --- | --- | --- |
 | `PDL_URL` | `.nais/app.yaml` | `https://pdl-api.dev-fss-pub.nais.io/graphql` |
 | `PDL_TARGET` | `.nais/app.yaml` | `dev-fss:pdl:pdl-api` |
-| `PDL_BEHANDLINGSNUMMER` | `.nais/app.yaml` | `B530` |
+| `PDL_BEHANDLINGSNUMMER` | `.nais/app.yaml` | `B118` |
 | `NAIS_TOKEN_ENDPOINT` | Nais (Texas) | injected |
 
 The app does not start if any of them is missing.
@@ -152,7 +152,7 @@ export AZURE_OPENID_CONFIG_ISSUER=http://localhost:8081/azuread
 export AZURE_OPENID_CONFIG_JWKS_URI=http://localhost:8081/azuread/jwks
 export AZURE_APP_PRE_AUTHORIZED_APPS='[{"name":"local:platforce:saas-proxy","clientId":"saas-proxy-local"}]'
 # PDL is not called at startup, so dummy values are enough to run the app locally.
-export PDL_URL=http://localhost:9999/graphql PDL_TARGET=local:pdl:pdl-api PDL_BEHANDLINGSNUMMER=B530
+export PDL_URL=http://localhost:9999/graphql PDL_TARGET=local:pdl:pdl-api PDL_BEHANDLINGSNUMMER=B118
 export NAIS_TOKEN_ENDPOINT=http://localhost:9999/token
 ./gradlew run
 ```

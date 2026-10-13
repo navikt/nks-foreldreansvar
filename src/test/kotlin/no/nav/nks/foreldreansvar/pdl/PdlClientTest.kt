@@ -25,7 +25,7 @@ class PdlClientTest {
         PdlConfig(
             url = "http://pdl.test/graphql",
             target = "dev-fss:pdl:pdl-api",
-            behandlingsnummer = "B530",
+            behandlingsnummer = "B118",
             tokenEndpoint = "http://texas.test/api/v1/token",
         )
 
@@ -79,7 +79,7 @@ class PdlClientTest {
 
         val pdlRequest = servers.pdlRequests.single()
         assertEquals("Bearer token-1", pdlRequest.headers[HttpHeaders.Authorization])
-        assertEquals("B530", pdlRequest.headers["Behandlingsnummer"])
+        assertEquals("B118", pdlRequest.headers["Behandlingsnummer"])
         val body = servers.pdlBodies.single()
         assertTrue(body.contains(""""variables":{"ident":"$ident","historikk":true}"""), body)
         assertTrue(body.contains("foreldreansvarQuery"))

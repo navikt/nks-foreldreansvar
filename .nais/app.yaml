@@ -35,7 +35,7 @@ spec:
       value: dev-fss:pdl:pdl-api
     # Registered processing purpose for our PDL lookups. Sent as the Behandlingsnummer header.
     - name: PDL_BEHANDLINGSNUMMER
-      value: B530
+      value: B118
   accessPolicy:
     outbound:
       # PDL runs in dev-fss (on-prem), so we call it as an external host.
