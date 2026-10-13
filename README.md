@@ -2,7 +2,7 @@
 
 A Kotlin application using [Ktor](https://ktor.io) with the Netty engine. It uses Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter and Shadow.
 
-For now the app exposes the health endpoints Nais needs and a protected test endpoint, `GET /api/ping`. All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). PDL, Kafka and observability will be added later.
+For now the app exposes the health endpoints Nais needs and a protected test endpoint, `GET /api/ping`. All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). The app has a client for [PDL](#pdl), which no endpoint uses yet. Kafka and observability will be added later.
 
 ### Why Ktor and Jackson?
 
@@ -19,7 +19,10 @@ src/main/kotlin/no/nav/nks/foreldreansvar/
   Auth.kt            JWT validation of Entra ID machine-to-machine tokens
   InternalRoutes.kt  /internal/isalive and /internal/isready (open)
   ApiRoutes.kt       /api/** routes (require a token)
-src/test/kotlin/     Tests using ktor-server-test-host and mock-oauth2-server
+  pdl/               PDL client: config, Texas token client, GraphQL client, models and errors
+src/main/resources/pdl/foreldreansvar.graphql   The GraphQL query sent to PDL
+src/test/kotlin/     Tests using ktor-server-test-host, mock-oauth2-server and Ktor MockEngine
+src/test/resources/pdl/  Recorded PDL-style responses used by the PDL tests
 local/               Config for running mock-oauth2-server locally
 .nais/app.yaml       Nais deployment configuration
 ```
@@ -90,11 +93,51 @@ curl -s -X POST "https://login.microsoftonline.com/trygdeetaten.no/oauth2/v2.0/t
   -d scope=api://dev-gcp.teamnks.nks-foreldreansvar/.default
 ```
 
+## PDL
+
+The app reads parental responsibility (*foreldreansvar*) from [PDL](https://pdl-docs.ansatt.nav.no/) with `PdlClient.hentForeldreansvar(ident, historikk)`. No endpoint uses it yet.
+
+### Token: Texas
+
+PDL requires an Entra ID machine-to-machine token. We get it from **Texas**, a token sidecar that Nais starts next to every app with `azure.application.enabled: true`. Nais sets `NAIS_TOKEN_ENDPOINT`, and the app POSTs `identity_provider=entra_id` and `target=dev-fss:pdl:pdl-api` to it ([Nais docs](https://doc.nais.io/auth/entra-id/how-to/consume-m2m/)).
+
+Why Texas instead of calling Entra ID ourselves: Texas holds the client credentials and caches tokens until shortly before they expire, so the app needs no secret, no token cache and no OAuth library. This is the current Nais standard. If PDL answers HTTP 401, the client asks Texas once more with `skip_cache=true` and retries once.
+
+### Network and access
+
+- PDL runs in dev-fss (on-prem). From dev-gcp we reach it through `https://pdl-api.dev-fss-pub.nais.io/graphql`, which is allowed with `accessPolicy.outbound.external` in `.nais/app.yaml`. `outbound.rules` only covers apps in the same GCP environment, so no rule is needed.
+- Each request sends the header `Behandlingsnummer: B118`, the registered purpose for our lookups.
+- PDL must also grant our app access (behandlingsnummer and their own access list). That is a manual request to the PDL team, not something this repo controls. Until it is done, PDL answers `unauthorized`.
+
+### Environment variables
+
+| Variable | Set by | Dev value |
+| --- | --- | --- |
+| `PDL_URL` | `.nais/app.yaml` | `https://pdl-api.dev-fss-pub.nais.io/graphql` |
+| `PDL_TARGET` | `.nais/app.yaml` | `dev-fss:pdl:pdl-api` |
+| `PDL_BEHANDLINGSNUMMER` | `.nais/app.yaml` | `B118` |
+| `NAIS_TOKEN_ENDPOINT` | Nais (Texas) | injected |
+
+The app does not start if any of them is missing.
+
+### Errors and personal data
+
+All failures are thrown as `PdlException`: `NotFound`, `Unauthorized`, `BadRequest`, `TokenUnavailable`, `Timeout` (10 s per request) or `Unexpected` (HTTP 5xx, unknown GraphQL error codes). PDL answers GraphQL errors with HTTP 200 and an `errors` array; the client maps `extensions.code` to these types.
+
+Idents are personal data. They are sent only as GraphQL variables and are never logged or put in exception messages. Logs contain only HTTP status and PDL error codes.
+
+### Changing the query
+
+1. Edit `src/main/resources/pdl/foreldreansvar.graphql` (for example by copying a query from the PDL playground).
+2. Update the classes in `pdl/Foreldreansvar.kt` so they match the fields in the query. Unknown fields are ignored, so removing a field from a class is safe.
+3. If you add or rename variables, update the `variables` map in `PdlClient.hentForeldreansvar`.
+4. Update `src/test/resources/pdl/foreldreansvar-ok.json` and run `./gradlew check`.
+
 ## Run locally
 
 With Java 17 or newer installed to run Gradle 9 (the Gradle wrapper downloads Gradle automatically). The app compiles with a Java 21 toolchain; if Java 21 is not installed, Gradle downloads it automatically.
 
-The app will not start without the `AZURE_*` env vars; it stops with an error naming the missing variable. Locally, use [mock-oauth2-server](https://github.com/navikt/mock-oauth2-server) as a fake Entra ID. `local/mock-oauth2-server.json` makes it issue saas-proxy-like tokens for client `saas-proxy-local`:
+The app will not start without the `AZURE_*` and PDL env vars; it stops with an error naming the missing variable. Locally, use [mock-oauth2-server](https://github.com/navikt/mock-oauth2-server) as a fake Entra ID. `local/mock-oauth2-server.json` makes it issue saas-proxy-like tokens for client `saas-proxy-local`:
 
 ```sh
 docker run --rm -p 8081:8080 -e JSON_CONFIG="$(cat local/mock-oauth2-server.json)" \
@@ -108,6 +151,9 @@ export AZURE_APP_CLIENT_ID=nks-foreldreansvar-local
 export AZURE_OPENID_CONFIG_ISSUER=http://localhost:8081/azuread
 export AZURE_OPENID_CONFIG_JWKS_URI=http://localhost:8081/azuread/jwks
 export AZURE_APP_PRE_AUTHORIZED_APPS='[{"name":"local:platforce:saas-proxy","clientId":"saas-proxy-local"}]'
+# PDL is not called at startup, so dummy values are enough to run the app locally.
+export PDL_URL=http://localhost:9999/graphql PDL_TARGET=local:pdl:pdl-api PDL_BEHANDLINGSNUMMER=B118
+export NAIS_TOKEN_ENDPOINT=http://localhost:9999/token
 ./gradlew run
 ```
 

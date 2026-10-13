@@ -1,0 +1,19 @@
+query foreldreansvarQuery($ident: ID!, $historikk: Boolean!) {
+    hentPerson(ident: $ident) {
+        foreldreansvar(historikk: $historikk) {
+            ansvar
+            ansvarlig
+            ansvarssubjekt
+            ansvarligUtenIdentifikator {
+                navn {
+                    fornavn
+                    mellomnavn
+                    etternavn
+                }
+                foedselsdato
+                statsborgerskap
+                kjoenn
+            }
+        }
+    }
+}

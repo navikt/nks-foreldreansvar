@@ -26,7 +26,22 @@ spec:
     application:
       enabled: true
       tenant: trygdeetaten.no # Entra ID dev tenant
+  env:
+    # PDL in dev-fss, reached from dev-gcp through its public ingress.
+    - name: PDL_URL
+      value: https://pdl-api.dev-fss-pub.nais.io/graphql
+    # Who we ask Texas for a token to: <cluster>:<namespace>:<app>.
+    - name: PDL_TARGET
+      value: dev-fss:pdl:pdl-api
+    # Registered processing purpose for our PDL lookups. Sent as the Behandlingsnummer header.
+    - name: PDL_BEHANDLINGSNUMMER
+      value: B118
   accessPolicy:
+    outbound:
+      # PDL runs in dev-fss (on-prem), so we call it as an external host.
+      # outbound.rules only covers apps in the same GCP environment, so no rule is needed here.
+      external:
+        - host: pdl-api.dev-fss-pub.nais.io
     inbound:
       rules:
         # Salesforce reaches us via saas-proxy, which calls us with its own token.
