@@ -18,14 +18,14 @@ import org.junit.jupiter.api.TestInstance
 class AuthTest {
     private val issuerId = "azuread"
     private val audience = "nks-foreldreansvar-client-id"
-    private val salesforceClientId = "salesforce-client-id"
+    private val saasProxyClientId = "saas-proxy-client-id"
     private val mockOAuth2Server = MockOAuth2Server()
 
     private val validClaims =
         mapOf(
             "idtyp" to "app",
             "roles" to listOf("access_as_application"),
-            "azp" to salesforceClientId,
+            "azp" to saasProxyClientId,
         )
 
     @BeforeAll
@@ -105,7 +105,7 @@ class AuthTest {
         mockOAuth2Server
             .issueToken(
                 issuerId = issuerId,
-                clientId = claims["azp"]?.toString() ?: salesforceClientId,
+                clientId = claims["azp"]?.toString() ?: saasProxyClientId,
                 tokenCallback =
                     DefaultOAuth2TokenCallback(
                         issuerId = issuerId,
@@ -120,6 +120,6 @@ class AuthTest {
             clientId = audience,
             issuer = mockOAuth2Server.issuerUrl(issuerId).toString(),
             jwksUri = mockOAuth2Server.jwksUrl(issuerId).toString(),
-            preAuthorizedClientIds = setOf(salesforceClientId),
+            preAuthorizedClientIds = setOf(saasProxyClientId),
         )
 }

@@ -12,7 +12,7 @@ class AzureConfigTest {
             "AZURE_OPENID_CONFIG_ISSUER" to "https://issuer.example",
             "AZURE_OPENID_CONFIG_JWKS_URI" to "https://issuer.example/jwks",
             "AZURE_APP_PRE_AUTHORIZED_APPS" to
-                """[{"name":"dev-external:teamcrm:salesforce","clientId":"sf-client-id"},{"name":"x:y:z","clientId":"other"}]""",
+                """[{"name":"dev-gcp:platforce:saas-proxy","clientId":"saas-proxy-client-id"},{"name":"x:y:z","clientId":"other"}]""",
         )
 
     @Test
@@ -22,7 +22,7 @@ class AzureConfigTest {
         assertEquals("our-client-id", config.clientId)
         assertEquals("https://issuer.example", config.issuer)
         assertEquals("https://issuer.example/jwks", config.jwksUri)
-        assertEquals(setOf("sf-client-id", "other"), config.preAuthorizedClientIds)
+        assertEquals(setOf("saas-proxy-client-id", "other"), config.preAuthorizedClientIds)
     }
 
     @Test
