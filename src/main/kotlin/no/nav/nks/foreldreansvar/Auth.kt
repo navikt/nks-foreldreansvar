@@ -18,7 +18,7 @@ private const val M2M_ROLE = "access_as_application"
 private val log = LoggerFactory.getLogger("no.nav.nks.foreldreansvar.Auth")
 
 /**
- * Validates Entra ID access tokens for machine-to-machine calls (e.g. from Salesforce).
+ * Validates Entra ID access tokens for machine-to-machine calls (e.g. from saas-proxy on behalf of Salesforce).
  *
  * The verifier checks signature (JWKS), issuer, audience and expiry.
  * [isAllowedM2mToken] then checks that the token is an app token from a pre-authorized client.

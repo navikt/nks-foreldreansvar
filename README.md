@@ -26,7 +26,7 @@ local/               Config for running mock-oauth2-server locally
 
 ## Authentication
 
-Salesforce calls this app machine-to-machine (no user involved). It gets an access token from Entra ID (Azure AD) with the *client credentials* flow and sends it as `Authorization: Bearer <token>`.
+Salesforce reaches this app through [saas-proxy](https://github.com/navikt/saas-proxy) (see below). The call to us is machine-to-machine (no user involved): saas-proxy gets an access token for our app from Entra ID (Azure AD) with the *client credentials* flow and sends it as `Authorization: Bearer <token>`. The token's caller (`azp`) is therefore saas-proxy, not Salesforce.
 
 ### What Nais does
 
@@ -41,7 +41,7 @@ Salesforce calls this app machine-to-machine (no user involved). It gets an acce
 
 `accessPolicy.inbound` says who may call us. Entra ID refuses to issue tokens for our app to anyone not listed there.
 
-> **Note:** The inbound rule allows `application: salesforce`, `namespace: teamcrm`, `cluster: dev-external`, the same registration other Nav Salesforce integrations (sf-pdfgen, saas-proxy) use. It will be verified when the callout from Salesforce is set up.
+> **Note:** The inbound rule allows `application: saas-proxy`, `namespace: platforce`. Salesforce does not call us directly, see [How Salesforce reaches the app](#how-salesforce-reaches-the-app).
 
 ### What the app checks
 
@@ -52,15 +52,36 @@ Salesforce calls this app machine-to-machine (no user involved). It gets an acce
 3. `aud` equals `AZURE_APP_CLIENT_ID`.
 4. `idtyp` is `app`, meaning a machine-to-machine token and not a user token.
 5. `roles` contains `access_as_application`, the role Nais gives to clients in the access policy.
-6. `azp` (the calling client's ID) is in `AZURE_APP_PRE_AUTHORIZED_APPS`. This limits callers to the access policy without hardcoding Salesforce's client ID.
+6. `azp` (the calling client's ID) is in `AZURE_APP_PRE_AUTHORIZED_APPS`. This limits callers to the access policy without hardcoding saas-proxy's client ID.
 
 Otherwise the app returns `401 Unauthorized`. `/internal/**` is always open, because Nais health checks call it without a token.
 
 `GET /api/ping` returns `pong`. It is a temporary endpoint for verifying auth, and will be replaced by the real PDL endpoints.
 
+### How Salesforce reaches the app
+
+Salesforce runs outside Nav's network and cannot call apps in the cluster directly. It goes through [saas-proxy](https://github.com/navikt/saas-proxy) (team platforce):
+
+```
+Salesforce --(Entra ID token for saas-proxy)--> saas-proxy --(new Entra ID token for us)--> nks-foreldreansvar
+```
+
+1. Salesforce gets a token for saas-proxy and calls `https://saas-proxy.ekstern.dev.nav.no/<our path>`, e.g. `/api/ping`, with the header `target-app: nks-foreldreansvar` (and optionally `target-namespace: teamnks`).
+2. saas-proxy checks that the method and path are in its whitelist (`src/main/resources/whitelist/dev.json` in the saas-proxy repo, under `teamnks` → `nks-foreldreansvar`).
+3. saas-proxy fetches a new token for our app *as itself* and forwards the request in-cluster to `http://nks-foreldreansvar.teamnks`.
+4. We validate the token as described above. `azp` is saas-proxy's client ID.
+
+For this to work, three things must be in place:
+
+- **Our app** (`.nais/app.yaml`): inbound rule for `application: saas-proxy`, `namespace: platforce`. Both apps run in dev-gcp, so no `cluster` is needed.
+- **saas-proxy** (`.nais/dev.yaml`): outbound rule for `application: nks-foreldreansvar`, `namespace: teamnks`.
+- **saas-proxy** (`whitelist/dev.json`): the endpoints Salesforce may call, e.g. `"GET /api/.*"`.
+
+The last two are changed by pull request to the saas-proxy repo.
+
 ### Calling the app in dev
 
-A client in the access policy requests a token from the dev tenant with the scope `api://dev-gcp.teamnks.nks-foreldreansvar/.default`:
+A client in the access policy (in practice saas-proxy) requests a token from the dev tenant with the scope `api://dev-gcp.teamnks.nks-foreldreansvar/.default`:
 
 ```sh
 curl -s -X POST "https://login.microsoftonline.com/trygdeetaten.no/oauth2/v2.0/token" \
@@ -73,7 +94,7 @@ curl -s -X POST "https://login.microsoftonline.com/trygdeetaten.no/oauth2/v2.0/t
 
 With Java 17 or newer installed to run Gradle 9 (the Gradle wrapper downloads Gradle automatically). The app compiles with a Java 21 toolchain; if Java 21 is not installed, Gradle downloads it automatically.
 
-The app will not start without the `AZURE_*` env vars; it stops with an error naming the missing variable. Locally, use [mock-oauth2-server](https://github.com/navikt/mock-oauth2-server) as a fake Entra ID. `local/mock-oauth2-server.json` makes it issue Salesforce-like tokens for client `salesforce-local`:
+The app will not start without the `AZURE_*` env vars; it stops with an error naming the missing variable. Locally, use [mock-oauth2-server](https://github.com/navikt/mock-oauth2-server) as a fake Entra ID. `local/mock-oauth2-server.json` makes it issue saas-proxy-like tokens for client `saas-proxy-local`:
 
 ```sh
 docker run --rm -p 8081:8080 -e JSON_CONFIG="$(cat local/mock-oauth2-server.json)" \
@@ -86,7 +107,7 @@ In another terminal:
 export AZURE_APP_CLIENT_ID=nks-foreldreansvar-local
 export AZURE_OPENID_CONFIG_ISSUER=http://localhost:8081/azuread
 export AZURE_OPENID_CONFIG_JWKS_URI=http://localhost:8081/azuread/jwks
-export AZURE_APP_PRE_AUTHORIZED_APPS='[{"name":"local:salesforce","clientId":"salesforce-local"}]'
+export AZURE_APP_PRE_AUTHORIZED_APPS='[{"name":"local:platforce:saas-proxy","clientId":"saas-proxy-local"}]'
 ./gradlew run
 ```
 
@@ -95,7 +116,7 @@ curl http://localhost:8080/internal/isalive
 curl -i http://localhost:8080/api/ping   # 401
 
 TOKEN=$(curl -s -X POST http://localhost:8081/azuread/token \
-  -d grant_type=client_credentials -d client_id=salesforce-local -d client_secret=secret \
+  -d grant_type=client_credentials -d client_id=saas-proxy-local -d client_secret=secret \
   -d scope=api://nks-foreldreansvar-local/.default | jq -r .access_token)
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/ping   # pong
 ```

@@ -29,7 +29,7 @@ spec:
   accessPolicy:
     inbound:
       rules:
-        # Salesforce (teamcrm), same as sf-pdfgen and saas-proxy. To be verified when the callout from Salesforce is set up.
-        - application: salesforce
-          namespace: teamcrm
-          cluster: dev-external
+        # Salesforce reaches us via saas-proxy, which calls us with its own token.
+        # Same cluster (dev-gcp), so no cluster field is needed.
+        - application: saas-proxy
+          namespace: platforce

@@ -6,11 +6,11 @@
       "requestMappings": [
         {
           "requestParam": "client_id",
-          "match": "salesforce-local",
+          "match": "saas-proxy-local",
           "claims": {
-            "sub": "salesforce-local",
+            "sub": "saas-proxy-local",
             "aud": ["nks-foreldreansvar-local"],
-            "azp": "salesforce-local",
+            "azp": "saas-proxy-local",
             "idtyp": "app",
             "roles": ["access_as_application"]
           }
