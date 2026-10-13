@@ -1,0 +1,25 @@
+{
+  "data": {
+    "hentPerson": {
+      "foreldreansvar": [
+        {
+          "ansvar": "felles",
+          "ansvarlig": "01020312345",
+          "ansvarssubjekt": "10101012345",
+          "ansvarligUtenIdentifikator": null
+        },
+        {
+          "ansvar": "felles",
+          "ansvarlig": null,
+          "ansvarssubjekt": "10101012345",
+          "ansvarligUtenIdentifikator": {
+            "navn": { "fornavn": "Kari", "mellomnavn": null, "etternavn": "Nordmann" },
+            "foedselsdato": "1980-05-17",
+            "statsborgerskap": "SWE",
+            "kjoenn": "KVINNE"
+          }
+        }
+      ]
+    }
+  }
+}
