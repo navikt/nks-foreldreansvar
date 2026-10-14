@@ -38,15 +38,20 @@ data class NavnDto(
 private val IDENT_REGEX = Regex("^\\d{11}$")
 
 /**
- * Returns the ident or throws [InvalidRequestException]. Only checks the format (11 digits): synthetic test idents
- * do not always pass the mod11 checksum, and PDL validates the ident itself.
+ * Returns the trimmed ident or throws [InvalidRequestException]. Only checks the format (11 digits): synthetic test
+ * idents do not always pass the mod11 checksum, and PDL validates the ident itself. The error names the field, never the value.
  */
-fun PersonRequest.validIdent(): String {
-    val ident = ident?.trim()
-    if (ident.isNullOrEmpty()) throw InvalidRequestException("ident is required")
-    if (!IDENT_REGEX.matches(ident)) throw InvalidRequestException("ident must be 11 digits")
+fun requireIdent(
+    value: String?,
+    fieldName: String,
+): String {
+    val ident = value?.trim()
+    if (ident.isNullOrEmpty()) throw InvalidRequestException("$fieldName is required")
+    if (!IDENT_REGEX.matches(ident)) throw InvalidRequestException("$fieldName must be 11 digits")
     return ident
 }
+
+fun PersonRequest.validIdent(): String = requireIdent(ident, "ident")
 
 fun List<Foreldreansvar>.toResponse() = PersonResponse(map { it.toDto() })
 

@@ -41,7 +41,7 @@ fun Application.configureErrorHandling() {
             call.respondProblem(HttpStatusCode.BadRequest, cause.detail)
         }
         exception<BadRequestException> { call, _ ->
-            call.respondProblem(HttpStatusCode.BadRequest, "Request body must be JSON like {\"ident\": \"<11 digits>\"}")
+            call.respondProblem(HttpStatusCode.BadRequest, "Request body must be valid JSON")
         }
         exception<PdlException> { call, cause ->
             val (status, detail) = cause.toHttp()
