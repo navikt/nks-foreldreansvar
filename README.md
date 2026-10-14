@@ -2,7 +2,7 @@
 
 A Kotlin application using [Ktor](https://ktor.io) with the Netty engine. It uses Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter and Shadow.
 
-The app exposes the health endpoints Nais needs, `POST /api/person` and `POST /api/foreldreansvar/verifiser` (foreldreansvar from [PDL](#pdl), see [API](#api)) and a temporary test endpoint, `GET /api/ping`. All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). Kafka and observability will be added later.
+The app exposes the health endpoints Nais needs, `POST /api/person` and `POST /api/foreldreansvar/verifiser` (foreldreansvar from [PDL](#pdl), see [API](#api)). All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). Kafka and observability will be added later.
 
 ### Why Ktor and Jackson?
 
@@ -62,8 +62,6 @@ Salesforce reaches this app through [saas-proxy](https://github.com/navikt/saas-
 
 Otherwise the app returns `401 Unauthorized`. `/internal/**` is always open, because Nais health checks call it without a token.
 
-`GET /api/ping` returns `pong`. It is a temporary endpoint for verifying auth.
-
 ### How Salesforce reaches the app
 
 Salesforce runs outside Nav's network and cannot call apps in the cluster directly. It goes through [saas-proxy](https://github.com/navikt/saas-proxy) (team platforce):
@@ -72,7 +70,7 @@ Salesforce runs outside Nav's network and cannot call apps in the cluster direct
 Salesforce --(Entra ID token for saas-proxy)--> saas-proxy --(new Entra ID token for us)--> nks-foreldreansvar
 ```
 
-1. Salesforce gets a token for saas-proxy and calls `https://saas-proxy.ekstern.dev.nav.no/<our path>`, e.g. `/api/ping`, with the header `target-app: nks-foreldreansvar` (and optionally `target-namespace: teamnks`).
+1. Salesforce gets a token for saas-proxy and calls `https://saas-proxy.ekstern.dev.nav.no/<our path>`, e.g. `/api/person`, with the header `target-app: nks-foreldreansvar` (and optionally `target-namespace: teamnks`).
 2. saas-proxy checks that the method and path are in its whitelist (`src/main/resources/whitelist/dev.json` in the saas-proxy repo, under `teamnks` → `nks-foreldreansvar`).
 3. saas-proxy fetches a new token for our app *as itself* and forwards the request in-cluster to `http://nks-foreldreansvar.teamnks`.
 4. We validate the token as described above. `azp` is saas-proxy's client ID.
@@ -296,12 +294,12 @@ export NAIS_TOKEN_ENDPOINT=http://localhost:9999/token
 
 ```sh
 curl http://localhost:8080/internal/isalive
-curl -i http://localhost:8080/api/ping   # 401
+curl -i -X POST http://localhost:8080/api/person   # 401
 
 TOKEN=$(curl -s -X POST http://localhost:8081/azuread/token \
   -d grant_type=client_credentials -d client_id=saas-proxy-local -d client_secret=secret \
   -d scope=api://nks-foreldreansvar-local/.default | jq -r .access_token)
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/ping   # pong
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{}" http://localhost:8080/api/person   # 400: auth passed, ident missing
 ```
 
 Locally there is no Texas or PDL, so `POST /api/person` with a valid ident fails with `502` (nothing answers on the dummy Texas and PDL URLs). Use the tests or the [Salesforce test](#test-end-to-end-from-salesforce-dev) to see real data.
