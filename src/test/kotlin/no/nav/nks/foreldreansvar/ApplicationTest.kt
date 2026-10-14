@@ -20,7 +20,7 @@ class ApplicationTest {
     @Test
     fun `isalive returns OK`() =
         testApplication {
-            application { module(dummyAzureConfig) }
+            application { module(dummyAzureConfig, unusedPdlClient()) }
 
             val response = client.get("/internal/isalive")
 
@@ -31,7 +31,7 @@ class ApplicationTest {
     @Test
     fun `isready returns OK`() =
         testApplication {
-            application { module(dummyAzureConfig) }
+            application { module(dummyAzureConfig, unusedPdlClient()) }
 
             val response = client.get("/internal/isready")
 
@@ -42,7 +42,7 @@ class ApplicationTest {
     @Test
     fun `unknown paths return not found`() =
         testApplication {
-            application { module(dummyAzureConfig) }
+            application { module(dummyAzureConfig, unusedPdlClient()) }
 
             assertEquals(HttpStatusCode.NotFound, client.get("/").status)
             assertEquals(HttpStatusCode.NotFound, client.get("/healthz").status)
