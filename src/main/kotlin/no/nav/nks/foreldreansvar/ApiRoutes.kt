@@ -22,4 +22,11 @@ fun Route.apiRoutes(pdlClient: PdlClient) {
         val foreldreansvar = pdlClient.hentForeldreansvar(ident, historikk = false)
         call.respond(foreldreansvar.toResponse())
     }
+
+    // Answers whether the parent can represent the child: the child must be in the parent's current foreldreansvar.
+    post("/foreldreansvar/verifiser") {
+        val request = call.receive<VerifiserRequest>().validated()
+        val foreldreansvar = pdlClient.hentForeldreansvar(request.forelderIdent, historikk = false)
+        call.respond(VerifiserResponse(kanRepresentere = foreldreansvar.kanRepresentere(request.barnIdent)))
+    }
 }
