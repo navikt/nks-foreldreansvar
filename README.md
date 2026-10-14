@@ -2,7 +2,7 @@
 
 A Kotlin application using [Ktor](https://ktor.io) with the Netty engine. It uses Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter and Shadow.
 
-The app exposes the health endpoints Nais needs, `POST /api/person` (foreldreansvar from [PDL](#pdl), see [API](#api)) and a temporary test endpoint, `GET /api/ping`. All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). Kafka and observability will be added later.
+The app exposes the health endpoints Nais needs, `POST /api/person` and `POST /api/foreldreansvar/verifiser` (foreldreansvar from [PDL](#pdl), see [API](#api)) and a temporary test endpoint, `GET /api/ping`. All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). Kafka and observability will be added later.
 
 ### Why Ktor and Jackson?
 
@@ -20,6 +20,7 @@ src/main/kotlin/no/nav/nks/foreldreansvar/
   InternalRoutes.kt  /internal/isalive and /internal/isready (open)
   ApiRoutes.kt       /api/** routes (require a token)
   PersonApi.kt       Request/response classes and ident validation for POST /api/person
+  VerifiserApi.kt    Request/response classes and the check for POST /api/foreldreansvar/verifiser
   ErrorHandling.kt   Maps exceptions to RFC 7807 problem-details responses
   pdl/               PDL client: config, Texas token client, GraphQL client, models and errors
 src/main/resources/pdl/foreldreansvar.graphql   The GraphQL query sent to PDL
@@ -141,6 +142,28 @@ Response `200 OK`:
 - We ask PDL with `historikk = false`, so only current entries are returned. Historical entries would require the caller to filter on metadata we do not fetch. We can add it as an optional request field if needed.
 - The response classes (`PersonApi.kt`) are separate from the PDL classes (`pdl/Foreldreansvar.kt`), so changing the PDL query does not silently change the contract with Salesforce.
 
+### `POST /api/foreldreansvar/verifiser`
+
+Answers whether a parent can represent a child. Salesforce calls it with `NKS_ForeldreansvarService.verifiser(forelderIdent, barnIdent)`.
+
+Request (`Content-Type: application/json`):
+
+```json
+{ "forelderIdent": "01020312345", "barnIdent": "10101012345" }
+```
+
+Both fields are required and must be exactly 11 digits (same rules as `ident` above).
+
+Response `200 OK`:
+
+```json
+{ "kanRepresentere": true }
+```
+
+- We look up the parent's foreldreansvar the same way as `POST /api/person` (`historikk = false`). `kanRepresentere` is `true` if `barnIdent` is an `ansvarssubjekt` in that list, otherwise `false`.
+- Both `true` and `false` are `200`. If the parent does not exist in PDL, the response is `404` (see [Errors](#errors)), so an unknown ident is not mixed up with a parent without foreldreansvar for the child.
+- For now we only check the list. `ansvar` values, age, death, adressebeskyttelse and fallbacks when `ansvarlig` is empty are not considered yet.
+
 ### Errors
 
 Errors use [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) *problem details* with `Content-Type: application/problem+json`:
@@ -151,20 +174,20 @@ Errors use [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) *problem details* 
 
 | Status | When |
 |---|---|
-| `400` | `ident` missing, blank or not 11 digits; body is not valid JSON; or PDL says the request is invalid (`bad_request`) |
+| `400` | `ident`, `forelderIdent` or `barnIdent` missing, blank or not 11 digits; body is not valid JSON; or PDL says the request is invalid (`bad_request`) |
 | `401` | Missing or invalid token (see [Authentication](#authentication)) |
-| `404` | The person does not exist in PDL |
+| `404` | The person (for `verifiser`: the parent) does not exist in PDL |
 | `500` | We could not get a PDL token from Texas (our own sidecar, so an internal error), or another unexpected error |
 | `502` | PDL denied *our* access, or answered with an error or something we could not read. This is 502 and not 401/403 because the caller did nothing wrong |
 | `504` | PDL did not answer within 10 seconds |
 
-The mapping is in `ErrorHandling.kt`, using Ktor's `StatusPages` plugin: routes just throw, and one place decides the HTTP response. `detail` is always a fixed text, never the exception message, because some exceptions (such as JSON parse errors) can contain the request body, which contains the ident. Logs only contain the exception type and status.
+The mapping is in `ErrorHandling.kt`, using Ktor's `StatusPages` plugin: routes just throw, and one place decides the HTTP response. `detail` is always a fixed text, never the exception message, because some exceptions (such as JSON parse errors) can contain the request body, which contains idents. Logs only contain the exception type and status.
 
-Note: `NKS_ForeldreansvarService.person()` returns the response for `200` and `404`, but throws `ForeldreansvarException` (and logs the response) for other statuses.
+Note: `NKS_ForeldreansvarService.person()` and `verifiser()` return the response for `200` and `404`, but throws `ForeldreansvarException` (and logs the response) for other statuses.
 
 ### Test end to end from Salesforce (dev)
 
-The whole chain is Salesforce → saas-proxy → nks-foreldreansvar → PDL. saas-proxy already allows `POST /api/person`.
+The whole chain is Salesforce → saas-proxy → nks-foreldreansvar → PDL. saas-proxy already allows `POST /api/person` and `POST /api/foreldreansvar/verifiser`.
 
 1. Log in to a Salesforce dev/scratch org where crm-nks-integration is deployed with the `FORELDREANSVAR_API` configuration.
 2. Open the Developer Console → *Debug* → *Open Execute Anonymous Window*, or use `sf apex run`.
@@ -178,6 +201,18 @@ try {
     System.debug('Body: ' + response.getBody());
 } catch (NKS_ForeldreansvarService.ForeldreansvarException e) {
     // Thrown for statuses other than 2xx and 404. The response is logged in Application_Log__c with the LoggId.
+    System.debug('Failed: ' + e.getMessage());
+}
+```
+
+To test `verifiser`, use a synthetic parent and one of the parent's children:
+
+```apex
+try {
+    HttpResponse response = NKS_ForeldreansvarService.verifiser('<synthetic parent ident>', '<synthetic child ident>');
+    System.debug('Status: ' + response.getStatusCode());
+    System.debug('Body: ' + response.getBody()); // {"kanRepresentere":true} or {"kanRepresentere":false}
+} catch (NKS_ForeldreansvarService.ForeldreansvarException e) {
     System.debug('Failed: ' + e.getMessage());
 }
 ```
@@ -197,7 +232,7 @@ Check the app logs in [Grafana/Loki](https://grafana.nav.cloud.nais.io) or with 
 
 ## PDL
 
-The app reads parental responsibility (*foreldreansvar*) from [PDL](https://pdl-docs.ansatt.nav.no/) with `PdlClient.hentForeldreansvar(ident, historikk)`. `POST /api/person` uses it.
+The app reads parental responsibility (*foreldreansvar*) from [PDL](https://pdl-docs.ansatt.nav.no/) with `PdlClient.hentForeldreansvar(ident, historikk)`. `POST /api/person` and `POST /api/foreldreansvar/verifiser` use it.
 
 ### Token: Texas
 
