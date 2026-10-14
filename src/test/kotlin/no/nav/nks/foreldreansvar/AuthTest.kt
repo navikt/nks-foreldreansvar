@@ -2,9 +2,12 @@ package no.nav.nks.foreldreansvar
 
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import no.nav.security.mock.oauth2.MockOAuth2Server
 import no.nav.security.mock.oauth2.token.DefaultOAuth2TokenCallback
@@ -35,25 +38,19 @@ class AuthTest {
     fun stop() = mockOAuth2Server.shutdown()
 
     @Test
-    fun `missing token returns 401`() = assertPing(token = null, expected = HttpStatusCode.Unauthorized)
+    fun `missing token returns 401`() = assertAuth(token = null, expected = HttpStatusCode.Unauthorized)
 
     @Test
-    fun `valid M2M token from pre-authorized client returns 200`() =
-        testApplication {
-            application { module(testAzureConfig(), unusedPdlClient()) }
-
-            val response = client.get("/api/ping") { bearerAuth(token()) }
-
-            assertEquals(HttpStatusCode.OK, response.status)
-            assertEquals("pong", response.bodyAsText())
-        }
+    fun `valid M2M token from pre-authorized client passes auth`() =
+        // An empty body fails validation (400) after auth, so PDL is never called.
+        assertAuth(token = token(), expected = HttpStatusCode.BadRequest)
 
     @Test
-    fun `wrong audience returns 401`() = assertPing(token = token(audience = "some-other-app"), expected = HttpStatusCode.Unauthorized)
+    fun `wrong audience returns 401`() = assertAuth(token = token(audience = "some-other-app"), expected = HttpStatusCode.Unauthorized)
 
     @Test
     fun `wrong issuer returns 401`() =
-        assertPing(
+        assertAuth(
             token = token(),
             expected = HttpStatusCode.Unauthorized,
             config = testAzureConfig().copy(issuer = mockOAuth2Server.issuerUrl("another-issuer").toString()),
@@ -61,21 +58,21 @@ class AuthTest {
 
     @Test
     fun `user token (not idtyp=app) returns 401`() =
-        assertPing(token = token(claims = validClaims - "idtyp"), expected = HttpStatusCode.Unauthorized)
+        assertAuth(token = token(claims = validClaims - "idtyp"), expected = HttpStatusCode.Unauthorized)
 
     @Test
     fun `token without access_as_application role returns 401`() =
-        assertPing(token = token(claims = validClaims - "roles"), expected = HttpStatusCode.Unauthorized)
+        assertAuth(token = token(claims = validClaims - "roles"), expected = HttpStatusCode.Unauthorized)
 
     @Test
     fun `client that is not pre-authorized returns 401`() =
-        assertPing(
+        assertAuth(
             token = token(claims = validClaims + ("azp" to "unknown-client")),
             expected = HttpStatusCode.Unauthorized,
         )
 
     @Test
-    fun `invalid token returns 401`() = assertPing(token = "not-a-jwt", expected = HttpStatusCode.Unauthorized)
+    fun `invalid token returns 401`() = assertAuth(token = "not-a-jwt", expected = HttpStatusCode.Unauthorized)
 
     @Test
     fun `internal endpoints do not require a token`() =
@@ -86,14 +83,19 @@ class AuthTest {
             assertEquals(HttpStatusCode.OK, client.get("/internal/isready").status)
         }
 
-    private fun assertPing(
+    private fun assertAuth(
         token: String?,
         expected: HttpStatusCode,
         config: AzureConfig = testAzureConfig(),
     ) = testApplication {
         application { module(config, unusedPdlClient()) }
 
-        val response: HttpResponse = client.get("/api/ping") { token?.let { bearerAuth(it) } }
+        val response: HttpResponse =
+            client.post("/api/person") {
+                token?.let { bearerAuth(it) }
+                contentType(ContentType.Application.Json)
+                setBody("{}")
+            }
 
         assertEquals(expected, response.status)
     }
