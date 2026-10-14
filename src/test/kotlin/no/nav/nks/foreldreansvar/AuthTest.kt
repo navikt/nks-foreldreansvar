@@ -40,7 +40,7 @@ class AuthTest {
     @Test
     fun `valid M2M token from pre-authorized client returns 200`() =
         testApplication {
-            application { module(testAzureConfig()) }
+            application { module(testAzureConfig(), unusedPdlClient()) }
 
             val response = client.get("/api/ping") { bearerAuth(token()) }
 
@@ -80,7 +80,7 @@ class AuthTest {
     @Test
     fun `internal endpoints do not require a token`() =
         testApplication {
-            application { module(testAzureConfig()) }
+            application { module(testAzureConfig(), unusedPdlClient()) }
 
             assertEquals(HttpStatusCode.OK, client.get("/internal/isalive").status)
             assertEquals(HttpStatusCode.OK, client.get("/internal/isready").status)
@@ -91,7 +91,7 @@ class AuthTest {
         expected: HttpStatusCode,
         config: AzureConfig = testAzureConfig(),
     ) = testApplication {
-        application { module(config) }
+        application { module(config, unusedPdlClient()) }
 
         val response: HttpResponse = client.get("/api/ping") { token?.let { bearerAuth(it) } }
 
