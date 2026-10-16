@@ -1,38 +1,27 @@
 package no.nav.nks.foreldreansvar
 
 import no.nav.nks.foreldreansvar.pdl.Foreldreansvar
-import no.nav.nks.foreldreansvar.pdl.RelatertBiPerson
+import no.nav.nks.foreldreansvar.pdl.PersonBolkResultat
 
-// Request and response bodies for POST /api/person. These are our API contract with Salesforce and are kept
-// separate from the PDL classes, so changing the PDL query does not silently change what Salesforce receives.
+// Request and response bodies for POST /api/foreldreansvar/barn. These are our API contract with Salesforce and are
+// kept separate from the PDL classes, so changing a PDL query does not silently change what Salesforce receives.
 
-/** Matches `NKS_ForeldreansvarService.PersonRequest` in crm-nks-integration. Nullable so a missing field gives our own 400. */
-data class PersonRequest(
+/** The parent's ident. Nullable so a missing field gives our own 400. */
+data class BarnRequest(
     val ident: String? = null,
 )
 
-data class PersonResponse(
-    val foreldreansvar: List<ForeldreansvarDto>,
+data class BarnResponse(
+    val barn: List<BarnDto>,
 )
 
-data class ForeldreansvarDto(
-    val ansvar: String?,
-    val ansvarlig: String?,
-    val ansvarssubjekt: String?,
-    val ansvarligUtenIdentifikator: PersonUtenIdentDto?,
-)
-
-data class PersonUtenIdentDto(
-    val navn: NavnDto?,
+/** Name and birth data are passed on as PDL returns them, `null` if missing. */
+data class BarnDto(
+    val ident: String,
+    val fornavn: String?,
+    val etternavn: String?,
     val foedselsdato: String?,
-    val statsborgerskap: String?,
-    val kjoenn: String?,
-)
-
-data class NavnDto(
-    val fornavn: String,
-    val mellomnavn: String?,
-    val etternavn: String,
+    val foedselsaar: Int?,
 )
 
 private val IDENT_REGEX = Regex("^\\d{11}$")
@@ -51,22 +40,29 @@ fun requireIdent(
     return ident
 }
 
-fun PersonRequest.validIdent(): String = requireIdent(ident, "ident")
+fun BarnRequest.validIdent(): String = requireIdent(ident, "ident")
 
-fun List<Foreldreansvar>.toResponse() = PersonResponse(map { it.toDto() })
+/** The children (`ansvarssubjekt`) in the parent's foreldreansvar, each once, in order, without the parent's own ident. */
+fun List<Foreldreansvar>.barnIdenter(forelderIdent: String): List<String> =
+    mapNotNull { it.ansvarssubjekt }.filter { it != forelderIdent }.distinct()
 
-private fun Foreldreansvar.toDto() =
-    ForeldreansvarDto(
-        ansvar = ansvar,
-        ansvarlig = ansvarlig,
-        ansvarssubjekt = ansvarssubjekt,
-        ansvarligUtenIdentifikator = ansvarligUtenIdentifikator?.toDto(),
+/** Builds the response in the order of [identer]. Children PDL did not return (e.g. `not_found`) are left out. */
+fun barnResponse(
+    identer: List<String>,
+    personer: List<PersonBolkResultat>,
+): BarnResponse {
+    val byIdent = personer.associateBy { it.ident }
+    return BarnResponse(identer.mapNotNull { byIdent[it]?.toDto() })
+}
+
+private fun PersonBolkResultat.toDto(): BarnDto {
+    val navn = person?.navn?.firstOrNull()
+    val foedsel = person?.foedselsdato?.firstOrNull()
+    return BarnDto(
+        ident = ident,
+        fornavn = navn?.fornavn,
+        etternavn = navn?.etternavn,
+        foedselsdato = foedsel?.foedselsdato,
+        foedselsaar = foedsel?.foedselsaar,
     )
-
-private fun RelatertBiPerson.toDto() =
-    PersonUtenIdentDto(
-        navn = navn?.let { NavnDto(it.fornavn, it.mellomnavn, it.etternavn) },
-        foedselsdato = foedselsdato,
-        statsborgerskap = statsborgerskap,
-        kjoenn = kjoenn,
-    )
+}

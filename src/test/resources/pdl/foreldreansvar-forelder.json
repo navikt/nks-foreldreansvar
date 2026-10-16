@@ -1,0 +1,14 @@
+{
+  "data": {
+    "hentPerson": {
+      "foreldreansvar": [
+        { "ansvar": "felles", "ansvarlig": "01020312345", "ansvarssubjekt": "10101012345", "ansvarligUtenIdentifikator": null },
+        { "ansvar": "felles", "ansvarlig": "03040512345", "ansvarssubjekt": "10101012345", "ansvarligUtenIdentifikator": null },
+        { "ansvar": "mor", "ansvarlig": "01020312345", "ansvarssubjekt": "20202012345", "ansvarligUtenIdentifikator": null },
+        { "ansvar": "far", "ansvarlig": "01020312345", "ansvarssubjekt": "30303012345", "ansvarligUtenIdentifikator": null },
+        { "ansvar": "felles", "ansvarlig": "05060712345", "ansvarssubjekt": "01020312345", "ansvarligUtenIdentifikator": null },
+        { "ansvar": "felles", "ansvarlig": "01020312345", "ansvarssubjekt": null, "ansvarligUtenIdentifikator": null }
+      ]
+    }
+  }
+}

@@ -11,11 +11,12 @@ import no.nav.nks.foreldreansvar.pdl.PdlClient
  * Errors are thrown and turned into problem-details responses by [configureErrorHandling].
  */
 fun Route.apiRoutes(pdlClient: PdlClient) {
-    // Returns who has parental responsibility for/of the person right now (historikk = false).
-    post("/person") {
-        val ident = call.receive<PersonRequest>().validIdent()
-        val foreldreansvar = pdlClient.hentForeldreansvar(ident, historikk = false)
-        call.respond(foreldreansvar.toResponse())
+    // Returns the children the parent has foreldreansvar for right now (historikk = false), with name and birth data.
+    post("/foreldreansvar/barn") {
+        val forelderIdent = call.receive<BarnRequest>().validIdent()
+        val identer = pdlClient.hentForeldreansvar(forelderIdent, historikk = false).barnIdenter(forelderIdent)
+        val personer = if (identer.isEmpty()) emptyList() else pdlClient.hentPersonBolk(identer, historikk = false)
+        call.respond(barnResponse(identer, personer))
     }
 
     // Answers whether the parent can represent the child: the child must be in the parent's current foreldreansvar.
