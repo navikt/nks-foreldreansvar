@@ -1,0 +1,27 @@
+{
+  "data": {
+    "hentPersonBolk": [
+      {
+        "ident": "30303012345",
+        "code": "not_found",
+        "person": null
+      },
+      {
+        "ident": "20202012345",
+        "code": "ok",
+        "person": {
+          "foedselsdato": [{ "foedselsdato": null, "foedselsaar": 2018 }],
+          "navn": []
+        }
+      },
+      {
+        "ident": "10101012345",
+        "code": "ok",
+        "person": {
+          "foedselsdato": [{ "foedselsdato": "2015-03-01", "foedselsaar": 2015 }],
+          "navn": [{ "fornavn": "Ola", "etternavn": "Nordmann" }]
+        }
+      }
+    ]
+  }
+}

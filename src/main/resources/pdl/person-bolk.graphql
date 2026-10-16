@@ -1,0 +1,19 @@
+query hentPersonBolkQuery($identer: [ID!]!, $historikk: Boolean!) {
+    # dette query er det kun mulig å bruke som System og er ikke tilgjengelig for borger eller saksbehandler
+    hentPersonBolk(identer: $identer) {
+        # bruk feltet "ident" til å koble resultatene med identene i requesten/(identer varablen)
+        ident
+        code
+        person {
+            foedselsdato {
+                foedselsdato
+                foedselsaar
+            }
+
+            navn(historikk: $historikk) {
+                fornavn
+                etternavn
+            }
+        }
+    }
+}

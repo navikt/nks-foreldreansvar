@@ -195,6 +195,47 @@ class PdlClientTest {
     }
 
     @Test
+    fun `hentPersonBolk returns only ok results and sends token, behandlingsnummer and variables`() {
+        val servers = FakeServers({ respondJson(resource("person-bolk-ok.json")) })
+        val identer = listOf("10101012345", "20202012345", "30303012345")
+
+        val result = runBlocking { client(servers).hentPersonBolk(identer, historikk = false) }
+
+        assertEquals(listOf("20202012345", "10101012345"), result.map { it.ident })
+        val ola = result.single { it.ident == "10101012345" }.person!!
+        assertEquals("Ola", ola.navn.single().fornavn)
+        assertEquals("2015-03-01", ola.foedselsdato.single().foedselsdato)
+        assertEquals(2015, ola.foedselsdato.single().foedselsaar)
+
+        val pdlRequest = servers.pdlRequests.single()
+        assertEquals("Bearer token-1", pdlRequest.headers[HttpHeaders.Authorization])
+        assertEquals("B118", pdlRequest.headers["Behandlingsnummer"])
+        val body = servers.pdlBodies.single()
+        assertTrue(body.contains(""""variables":{"identer":["10101012345","20202012345","30303012345"],"historikk":false}"""), body)
+        assertTrue(body.contains("hentPersonBolkQuery"))
+    }
+
+    @Test
+    fun `hentPersonBolk with no idents does not call PDL`() {
+        val servers = FakeServers()
+
+        val result = runBlocking { client(servers).hentPersonBolk(emptyList()) }
+
+        assertTrue(result.isEmpty())
+        assertTrue(servers.pdlRequests.isEmpty())
+    }
+
+    @Test
+    fun `hentPersonBolk unauthorized error gives Unauthorized without the idents in the message`() {
+        val servers = FakeServers({ respondJson(resource("unauthorized.json")) })
+
+        val error =
+            assertThrows<PdlException.Unauthorized> { runBlocking { client(servers).hentPersonBolk(listOf(ident)) } }
+
+        assertFalse(error.message!!.contains(ident))
+    }
+
+    @Test
     fun `Texas failure gives TokenUnavailable`() {
         val engine = MockEngine { respond("", HttpStatusCode.InternalServerError) }
         val httpClient = createHttpClient(engine)
