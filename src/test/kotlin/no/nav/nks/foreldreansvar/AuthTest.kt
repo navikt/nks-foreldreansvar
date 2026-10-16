@@ -91,7 +91,7 @@ class AuthTest {
         application { module(config, unusedPdlClient()) }
 
         val response: HttpResponse =
-            client.post("/api/person") {
+            client.post("/api/foreldreansvar/barn") {
                 token?.let { bearerAuth(it) }
                 contentType(ContentType.Application.Json)
                 setBody("{}")

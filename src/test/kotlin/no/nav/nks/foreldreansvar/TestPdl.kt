@@ -22,10 +22,16 @@ private val testPdlConfig =
         tokenEndpoint = "http://texas.test/api/v1/token",
     )
 
-/** A real [PdlClient] whose HTTP calls go to fake Texas and PDL servers. Records the bodies sent to PDL. */
+/**
+ * A real [PdlClient] whose HTTP calls go to fake Texas and PDL servers. Records the bodies sent to PDL.
+ * [pdl] answers hentForeldreansvar, [bolk] answers hentPersonBolk.
+ */
 class FakePdl(
     timeoutMillis: Long = 10_000,
     private val texasStatus: HttpStatusCode = HttpStatusCode.OK,
+    private val bolk: suspend MockRequestHandleScope.(
+        HttpRequestData,
+    ) -> HttpResponseData = { error("hentPersonBolk should not be called") },
     private val pdl: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData,
 ) {
     val pdlBodies = mutableListOf<String>()
@@ -39,8 +45,9 @@ class FakePdl(
                     respond("", texasStatus)
                 }
             } else {
-                pdlBodies += request.body.toByteArray().decodeToString()
-                pdl(request)
+                val body = request.body.toByteArray().decodeToString()
+                pdlBodies += body
+                if (body.contains("hentPersonBolkQuery")) bolk(request) else pdl(request)
             }
         }
 

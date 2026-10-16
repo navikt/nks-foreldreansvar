@@ -60,6 +60,30 @@ class PdlClient(
         return person.foreldreansvar
     }
 
+    /**
+     * Looks up several persons in one call. Returns only results with `code == "ok"`; the rest are left out and
+     * only their codes are logged. hentPersonBolk is only available with a system token (Texas M2M), not TokenX/OBO.
+     */
+    suspend fun hentPersonBolk(
+        identer: List<String>,
+        historikk: Boolean = false,
+    ): List<PersonBolkResultat> {
+        if (identer.isEmpty()) return emptyList()
+        val request = GraphQLRequest(PERSON_BOLK_QUERY, mapOf("identer" to identer, "historikk" to historikk))
+        val resultater = callPdl(request).data?.hentPersonBolk.orEmpty()
+        val (ok, ikkeOk) = resultater.partition { it.code == "ok" && it.person != null }
+        if (ikkeOk.isNotEmpty()) {
+            // Only codes and counts: never log the idents.
+            log.info(
+                "hentPersonBolk left out {} of {} results, codes {}",
+                ikkeOk.size,
+                resultater.size,
+                ikkeOk.groupingBy { it.code }.eachCount(),
+            )
+        }
+        return ok
+    }
+
     private suspend fun callPdl(request: GraphQLRequest): PdlResponse {
         try {
             var response = post(request, tokenClient.token(config.target))
@@ -153,7 +177,8 @@ class PdlClient(
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private data class Data(
-        val hentPerson: HentPerson?,
+        val hentPerson: HentPerson? = null,
+        val hentPersonBolk: List<PersonBolkResultat>? = null,
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -175,6 +200,11 @@ class PdlClient(
         val FORELDREANSVAR_QUERY: String =
             requireNotNull(PdlClient::class.java.getResource("/pdl/foreldreansvar.graphql")) {
                 "Missing resource /pdl/foreldreansvar.graphql"
+            }.readText()
+
+        val PERSON_BOLK_QUERY: String =
+            requireNotNull(PdlClient::class.java.getResource("/pdl/person-bolk.graphql")) {
+                "Missing resource /pdl/person-bolk.graphql"
             }.readText()
     }
 }

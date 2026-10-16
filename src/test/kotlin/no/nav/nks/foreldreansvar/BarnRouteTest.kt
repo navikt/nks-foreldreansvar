@@ -24,14 +24,17 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class PersonRouteTest {
+class BarnRouteTest {
     private val issuerId = "azuread"
     private val audience = "nks-foreldreansvar-client-id"
     private val saasProxyClientId = "saas-proxy-client-id"
     private val mockOAuth2Server = MockOAuth2Server()
     private val mapper = jacksonObjectMapper()
 
-    private val ident = "12345678910"
+    // ansvarlig in pdl/foreldreansvar-forelder.json
+    private val ident = "01020312345"
+
+    private val path = "/api/foreldreansvar/barn"
 
     @BeforeAll
     fun start() = mockOAuth2Server.start()
@@ -40,39 +43,106 @@ class PersonRouteTest {
     fun stop() = mockOAuth2Server.shutdown()
 
     @Test
-    fun `returns foreldreansvar from PDL without history`() {
-        val pdl = FakePdl { respondJson(pdlResource("foreldreansvar-ok.json")) }
+    fun `returns the parent's children with name and birth data from PDL`() {
+        val pdl =
+            FakePdl(bolk = { respondJson(pdlResource("person-bolk-ok.json")) }) {
+                respondJson(pdlResource("foreldreansvar-forelder.json"))
+            }
 
-        val response = postPerson(pdl, """{"ident":"$ident"}""")
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
 
         assertEquals(HttpStatusCode.OK, response.status)
+        // Order follows foreldreansvar; 30303012345 is not_found in bolk and is left out.
         assertEquals(
             mapper.readTree(
                 """
-                {"foreldreansvar":[
-                  {"ansvar":"felles","ansvarlig":"01020312345","ansvarssubjekt":"10101012345","ansvarligUtenIdentifikator":null},
-                  {"ansvar":"felles","ansvarlig":null,"ansvarssubjekt":"10101012345","ansvarligUtenIdentifikator":{
-                    "navn":{"fornavn":"Kari","mellomnavn":null,"etternavn":"Nordmann"},
-                    "foedselsdato":"1980-05-17","statsborgerskap":"SWE","kjoenn":"KVINNE"}}
+                {"barn":[
+                  {"ident":"10101012345","fornavn":"Ola","etternavn":"Nordmann","foedselsdato":"2015-03-01","foedselsaar":2015},
+                  {"ident":"20202012345","fornavn":null,"etternavn":null,"foedselsdato":null,"foedselsaar":2018}
                 ]}
                 """,
             ),
             mapper.readTree(response.body),
         )
-        val variables = mapper.readTree(pdl.pdlBodies.single())["variables"]
-        assertEquals(ident, variables["ident"].asText())
-        assertFalse(variables["historikk"].asBoolean())
+        assertEquals(2, pdl.pdlBodies.size)
+        val foreldreansvarVariables = mapper.readTree(pdl.pdlBodies[0])["variables"]
+        assertEquals(ident, foreldreansvarVariables["ident"].asText())
+        assertFalse(foreldreansvarVariables["historikk"].asBoolean())
+        // Each child once, without the parent's own ident and without null.
+        val bolkVariables = mapper.readTree(pdl.pdlBodies[1])["variables"]
+        assertEquals(listOf("10101012345", "20202012345", "30303012345"), bolkVariables["identer"].map { it.asText() })
+        assertFalse(bolkVariables["historikk"].asBoolean())
     }
 
     @Test
-    fun `person without foreldreansvar returns empty list`() {
+    fun `parent without foreldreansvar returns empty list without calling bolk`() {
         val pdl = FakePdl { respondJson("""{"data":{"hentPerson":{"foreldreansvar":[]}}}""") }
 
-        val response = postPerson(pdl, """{"ident":"$ident"}""")
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
 
         assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals(mapper.readTree("""{"foreldreansvar":[]}"""), mapper.readTree(response.body))
+        assertEquals(mapper.readTree("""{"barn":[]}"""), mapper.readTree(response.body))
+        assertEquals(1, pdl.pdlBodies.size)
     }
+
+    @Test
+    fun `foreldreansvar where the person is only the child returns empty list without calling bolk`() {
+        val pdl =
+            FakePdl {
+                respondJson(
+                    """{"data":{"hentPerson":{"foreldreansvar":[
+                       {"ansvar":"felles","ansvarlig":"05060712345","ansvarssubjekt":"$ident","ansvarligUtenIdentifikator":null}
+                    ]}}}""",
+                )
+            }
+
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(mapper.readTree("""{"barn":[]}"""), mapper.readTree(response.body))
+    }
+
+    @Test
+    fun `no children found in bolk returns empty list`() {
+        val pdl =
+            FakePdl(bolk = {
+                respondJson("""{"data":{"hentPersonBolk":[{"ident":"10101012345","code":"not_found","person":null}]}}""")
+            }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
+
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(mapper.readTree("""{"barn":[]}"""), mapper.readTree(response.body))
+    }
+
+    @Test
+    fun `bolk denying our access returns 502`() =
+        assertPdlError(
+            FakePdl(bolk = { respondJson(pdlResource("unauthorized.json")) }) { respondJson(pdlResource("foreldreansvar-ok.json")) },
+            HttpStatusCode.BadGateway,
+        )
+
+    @Test
+    fun `bolk HTTP 500 returns 502`() =
+        assertPdlError(
+            FakePdl(bolk = { respond("", HttpStatusCode.InternalServerError) }) { respondJson(pdlResource("foreldreansvar-ok.json")) },
+            HttpStatusCode.BadGateway,
+        )
+
+    @Test
+    fun `old path api person is gone`() =
+        testApplication {
+            application { module(testAzureConfig(), unusedPdlClient()) }
+
+            val response =
+                client.post("/api/person") {
+                    bearerAuth(token())
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"ident":"$ident"}""")
+                }
+
+            assertEquals(HttpStatusCode.NotFound, response.status)
+        }
 
     @Test
     fun `person not in PDL returns 404`() = assertPdlError(FakePdl { respondJson(pdlResource("not-found.json")) }, HttpStatusCode.NotFound)
@@ -131,7 +201,7 @@ class PersonRouteTest {
             application { module(testAzureConfig(), unusedPdlClient()) }
 
             val response =
-                client.post("/api/person") {
+                client.post(path) {
                     contentType(ContentType.Application.Json)
                     setBody("""{"ident":"$ident"}""")
                 }
@@ -143,12 +213,12 @@ class PersonRouteTest {
         pdl: FakePdl,
         expected: HttpStatusCode,
     ) {
-        val response = postPerson(pdl, """{"ident":"$ident"}""")
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
         assertProblem(response, expected)
     }
 
     private fun assertBadRequest(body: String) {
-        val response = postPerson(FakePdl { error("PDL should not be called") }, body)
+        val response = postBarn(FakePdl { error("PDL should not be called") }, body)
         assertProblem(response, HttpStatusCode.BadRequest)
     }
 
@@ -170,7 +240,7 @@ class PersonRouteTest {
         val body: String,
     )
 
-    private fun postPerson(
+    private fun postBarn(
         pdl: FakePdl,
         body: String,
     ): Response {
@@ -179,7 +249,7 @@ class PersonRouteTest {
             application { module(testAzureConfig(), pdl.client) }
 
             val response: HttpResponse =
-                client.post("/api/person") {
+                client.post(path) {
                     bearerAuth(token())
                     contentType(ContentType.Application.Json)
                     setBody(body)
