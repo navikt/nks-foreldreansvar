@@ -8,10 +8,13 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import no.nav.nks.foreldreansvar.pdl.PdlClient
+import java.time.Clock
+import java.time.ZoneId
 
 fun Application.module(
     azureConfig: AzureConfig,
     pdlClient: PdlClient,
+    clock: Clock = Clock.system(ZoneId.of("Europe/Oslo")),
 ) {
     install(ContentNegotiation) {
         jackson()
@@ -22,7 +25,7 @@ fun Application.module(
         internalRoutes()
         authenticate(AZURE_AUTH) {
             route("/api") {
-                apiRoutes(pdlClient)
+                apiRoutes(pdlClient, clock)
             }
         }
     }
