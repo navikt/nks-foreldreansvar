@@ -17,12 +17,13 @@ src/main/kotlin/no/nav/nks/foreldreansvar/
   Application.kt     Application.module(): installs plugins (JSON, error handling, auth) and routes
   AzureConfig.kt     Entra ID settings read from env vars injected by Nais
   Auth.kt            JWT validation of Entra ID machine-to-machine tokens
-  InternalRoutes.kt  /internal/isalive and /internal/isready (open)
+  InternalRoutes.kt  /internal/isalive and /internal/isready (open). isalive also reflects the Leesah consumer
   ApiRoutes.kt       /api/** routes (require a token)
   BarnApi.kt         Request/response classes and ident validation for POST /api/foreldreansvar/barn
   VerifiserApi.kt    Request/response classes and the check for POST /api/foreldreansvar/verifiser
   ErrorHandling.kt   Maps exceptions to RFC 7807 problem-details responses
   pdl/               PDL client: config, Texas token client, GraphQL client, models and errors
+  leesah/            Kafka consumer for PDL's pdl.leesah-v1: config, filter, handler and health
 src/main/resources/pdl/  The GraphQL queries sent to PDL (foreldreansvar, person-bolk)
 src/test/kotlin/     Tests using ktor-server-test-host, mock-oauth2-server and Ktor MockEngine
 src/test/resources/pdl/  Recorded PDL-style responses used by the PDL tests
@@ -259,6 +260,37 @@ The queries are in `src/main/resources/pdl/`: `foreldreansvar.graphql` (classes 
 3. If you add or rename variables, update the `variables` map in `PdlClient.hentForeldreansvar` or `PdlClient.hentPersonBolk`.
 4. Update the test responses in `src/test/resources/pdl/` and run `./gradlew check`.
 
+## Leesah (PDL events on Kafka)
+
+The app reads PDL's event topic `pdl.leesah-v1` ("Livet er en strøm av hendelser") to find out when foreldreansvar ends. Events that match the filter go to `ForeldreansvarHendelseHandler`. For now that's a placeholder that logs `hendelseId` and `endringstype`. Notifying Salesforce is the next step and plugs in there.
+
+> **Status:** PDL does not publish `FORELDREANSVAR_V1` on Leesah yet, and our app is not on the topic's ACL. Both are requested from the PDL team. Until the ACL is in place, `LEESAH_ENABLED` is `false` in `.nais/app.yaml`.
+
+### How it works
+
+- **Avro without generated classes.** Leesah is Avro with a schema registry. We read it as `GenericRecord` and pick out the few top-level fields we need (`Personhendelse.kt`). That way we need no code generation and no GitHub Packages token, and new fields on PDL's side don't break us.
+- **Filter.** `LEESAH_OPPLYSNINGSTYPER` and `LEESAH_ENDRINGSTYPER` decide what is relevant. Everything else is read, then ignored.
+- **Offsets.** Auto-commit is off. We commit after each batch is handled, so delivery is *at-least-once*: after a crash, the last batch is read again. The handler must therefore tolerate duplicates (use `hendelseId`). The consumer group is `nks-foreldreansvar-leesah-v1`. Changing it makes the app start over from `auto.offset.reset=latest`.
+- **Errors.** If the handler throws, we retry 3 times with backoff (1 s, 2 s). If it still fails, the consumer stops without committing and `/internal/isalive` returns 503. Nais then restarts the pod, and we continue from the last committed offset. A record that can't be deserialized is logged (partition and offset only) and skipped. There is no dead-letter topic, because a placeholder handler has nothing to park.
+- **Health.** `/internal/isalive` fails if the consumer has stopped because of an error or hasn't polled for 5 minutes. `/internal/isready` only reflects the HTTP API, so a Kafka problem doesn't stop traffic to the API.
+- **Personal data.** The Kafka key (aktør-id) and `personidenter` are never logged. `Personhendelse.toString()` masks them.
+
+### Environment variables
+
+| Variable | Set by | Dev value |
+| --- | --- | --- |
+| `LEESAH_ENABLED` | `.nais/app.yaml` | `false` until the ACL is in place (default `true`) |
+| `LEESAH_TOPIC` | `.nais/app.yaml` | `pdl.leesah-v1` |
+| `LEESAH_OPPLYSNINGSTYPER` | `.nais/app.yaml` | `FORELDREANSVAR_V1` (comma-separated) |
+| `LEESAH_ENDRINGSTYPER` | `.nais/app.yaml` | `OPPHOERT,ANNULLERT` (comma-separated) |
+| `KAFKA_BROKERS`, `KAFKA_TRUSTSTORE_PATH`, `KAFKA_KEYSTORE_PATH`, `KAFKA_CREDSTORE_PASSWORD`, `KAFKA_SCHEMA_REGISTRY`, `KAFKA_SCHEMA_REGISTRY_USER`, `KAFKA_SCHEMA_REGISTRY_PASSWORD` | Nais (`kafka.pool: nav-dev`) | injected |
+
+When the consumer is enabled, the app does not start if any of them is missing.
+
+### Tests
+
+The tests use Kafka's `MockConsumer` and Confluent's in-memory schema registry (`mock://`), so they need no Docker. `src/test/resources/leesah/personhendelse-test.avsc` is a test-only subset of PDL's schema.
+
 ## Run locally
 
 With Java 17 or newer installed to run Gradle 9 (the Gradle wrapper downloads Gradle automatically). The app compiles with a Java 21 toolchain; if Java 21 is not installed, Gradle downloads it automatically.
@@ -280,6 +312,8 @@ export AZURE_APP_PRE_AUTHORIZED_APPS='[{"name":"local:platforce:saas-proxy","cli
 # PDL is not called at startup, so dummy values are enough to run the app locally.
 export PDL_URL=http://localhost:9999/graphql PDL_TARGET=local:pdl:pdl-api PDL_BEHANDLINGSNUMMER=B118
 export NAIS_TOKEN_ENDPOINT=http://localhost:9999/token
+# There is no Kafka locally.
+export LEESAH_ENABLED=false
 ./gradlew run
 ```
 

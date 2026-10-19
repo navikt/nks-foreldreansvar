@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "Personhendelse",
+  "namespace": "no.nav.person.pdl.leesah",
+  "doc": "Test-only subset of PDL's Personhendelse schema: the fields we read, plus one optional field we ignore.",
+  "fields": [
+    { "name": "hendelseId", "type": "string" },
+    { "name": "personidenter", "type": { "type": "array", "items": "string" } },
+    { "name": "master", "type": "string" },
+    { "name": "opprettet", "type": { "type": "long", "logicalType": "timestamp-millis" } },
+    { "name": "opplysningstype", "type": "string" },
+    {
+      "name": "endringstype",
+      "type": { "type": "enum", "name": "Endringstype", "symbols": ["OPPRETTET", "KORRIGERT", "ANNULLERT", "OPPHOERT"] }
+    },
+    { "name": "tidligereHendelseId", "type": ["null", "string"], "default": null },
+    { "name": "navn", "type": ["null", { "type": "record", "name": "Navn", "fields": [{ "name": "fornavn", "type": "string" }] }], "default": null }
+  ]
+}

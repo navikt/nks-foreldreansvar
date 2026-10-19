@@ -29,6 +29,16 @@ class ApplicationTest {
         }
 
     @Test
+    fun `isalive returns 503 when a background check fails`() =
+        testApplication {
+            application { module(dummyAzureConfig, unusedPdlClient(), isAlive = { false }) }
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, client.get("/internal/isalive").status)
+            // Readiness only reflects the HTTP API.
+            assertEquals(HttpStatusCode.OK, client.get("/internal/isready").status)
+        }
+
+    @Test
     fun `isready returns OK`() =
         testApplication {
             application { module(dummyAzureConfig, unusedPdlClient()) }

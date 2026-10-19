@@ -15,6 +15,7 @@ fun Application.module(
     azureConfig: AzureConfig,
     pdlClient: PdlClient,
     clock: Clock = Clock.system(ZoneId.of("Europe/Oslo")),
+    isAlive: () -> Boolean = { true },
 ) {
     install(ContentNegotiation) {
         jackson()
@@ -22,7 +23,7 @@ fun Application.module(
     configureErrorHandling()
     configureAuth(azureConfig)
     routing {
-        internalRoutes()
+        internalRoutes(isAlive)
         authenticate(AZURE_AUTH) {
             route("/api") {
                 apiRoutes(pdlClient, clock)
