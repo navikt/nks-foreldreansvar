@@ -22,6 +22,10 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
+import java.time.Clock
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class BarnRouteTest {
@@ -36,6 +40,9 @@ class BarnRouteTest {
 
     private val path = "/api/foreldreansvar/barn"
 
+    // 2025-03-01 00:30 in Oslo is still 2025-02-28 in UTC: Ola (born 2015-03-01) is 10 only if Oslo time is used.
+    private val clock = Clock.fixed(Instant.parse("2025-02-28T23:30:00Z"), ZoneId.of("Europe/Oslo"))
+
     @BeforeAll
     fun start() = mockOAuth2Server.start()
 
@@ -43,7 +50,7 @@ class BarnRouteTest {
     fun stop() = mockOAuth2Server.shutdown()
 
     @Test
-    fun `returns the parent's children with name and birth data from PDL`() {
+    fun `returns the parent's children with name, birth data and age from PDL`() {
         val pdl =
             FakePdl(bolk = { respondJson(pdlResource("person-bolk-ok.json")) }) {
                 respondJson(pdlResource("foreldreansvar-forelder.json"))
@@ -57,8 +64,8 @@ class BarnRouteTest {
             mapper.readTree(
                 """
                 {"barn":[
-                  {"ident":"10101012345","fornavn":"Ola","etternavn":"Nordmann","foedselsdato":"2015-03-01","foedselsaar":2015},
-                  {"ident":"20202012345","fornavn":null,"etternavn":null,"foedselsdato":null,"foedselsaar":2018}
+                  {"ident":"10101012345","fornavn":"Ola","etternavn":"Nordmann","foedselsdato":"2015-03-01","foedselsaar":2015,"alder":10},
+                  {"ident":"20202012345","fornavn":null,"etternavn":null,"foedselsdato":null,"foedselsaar":2018,"alder":null}
                 ]}
                 """,
             ),
@@ -72,6 +79,17 @@ class BarnRouteTest {
         val bolkVariables = mapper.readTree(pdl.pdlBodies[1])["variables"]
         assertEquals(listOf("10101012345", "20202012345", "30303012345"), bolkVariables["identer"].map { it.asText() })
         assertFalse(bolkVariables["historikk"].asBoolean())
+    }
+
+    @Test
+    fun `alder counts whole years and is null without a valid foedselsdato`() {
+        val today = LocalDate.parse("2025-06-15")
+        assertEquals(10, alder("2015-06-15", today))
+        assertEquals(9, alder("2015-06-16", today))
+        assertEquals(0, alder("2025-06-15", today))
+        assertEquals(null, alder(null, today))
+        assertEquals(null, alder("2015", today))
+        assertEquals(null, alder("2030-01-01", today))
     }
 
     @Test
@@ -246,7 +264,7 @@ class BarnRouteTest {
     ): Response {
         lateinit var result: Response
         testApplication {
-            application { module(testAzureConfig(), pdl.client) }
+            application { module(testAzureConfig(), pdl.client, clock) }
 
             val response: HttpResponse =
                 client.post(path) {

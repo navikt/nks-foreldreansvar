@@ -113,14 +113,14 @@ Response `200 OK`:
 ```json
 {
   "barn": [
-    { "ident": "10101012345", "fornavn": "Ola", "etternavn": "Nordmann", "foedselsdato": "2015-03-01", "foedselsaar": 2015 },
-    { "ident": "20202012345", "fornavn": null, "etternavn": null, "foedselsdato": null, "foedselsaar": 2018 }
+    { "ident": "10101012345", "fornavn": "Ola", "etternavn": "Nordmann", "foedselsdato": "2015-03-01", "foedselsaar": 2015, "alder": 10 },
+    { "ident": "20202012345", "fornavn": null, "etternavn": null, "foedselsdato": null, "foedselsaar": 2018, "alder": null }
   ]
 }
 ```
 
 - We look up the parent's foreldreansvar with `historikk = false`, take each `ansvarssubjekt` once (without the parent's own ident), and look the children up with `hentPersonBolk`.
-- `fornavn`/`etternavn` come from the current name. `foedselsdato` and `foedselsaar` are passed on as PDL returns them. Missing values are `null`. We do not calculate age.
+- `fornavn`/`etternavn` come from the current name. `foedselsdato` and `foedselsaar` are passed on as PDL returns them. Missing values are `null`. `alder` is whole years from `foedselsdato` to today (Europe/Oslo). It is `null` if `foedselsdato` is missing, since `foedselsaar` alone could give an age that is one year too high.
 - Children PDL does not return with `code: ok` (e.g. `not_found`) are left out. Only the codes are logged.
 - No children gives `200` with an empty list. If the parent does not exist in PDL, the response is `404`.
 - For now we return all children, including children with adressebeskyttelse and dead children.
@@ -172,7 +172,7 @@ Note: `NKS_ForeldreansvarService.verifiser()` returns the response for `200` and
 
 ### Test end to end from Salesforce (dev)
 
-The whole chain is Salesforce → saas-proxy → nks-foreldreansvar → PDL. saas-proxy allows `POST /api/foreldreansvar/verifiser`. `POST /api/foreldreansvar/barn` needs to be added to the saas-proxy whitelist, and `NKS_ForeldreansvarService.barn(ident)` needs to be added in crm-nks-integration (replacing `person(ident)`), before the first script below works.
+The whole chain is Salesforce → saas-proxy → nks-foreldreansvar → PDL. saas-proxy allows `POST /api/foreldreansvar/barn` and `POST /api/foreldreansvar/verifiser`, and crm-nks-integration has `NKS_ForeldreansvarService.barn(ident)` and `verifiser(forelderIdent, barnIdent)`.
 
 1. Log in to a Salesforce dev/scratch org where crm-nks-integration is deployed with the `FORELDREANSVAR_API` configuration.
 2. Open the Developer Console → *Debug* → *Open Execute Anonymous Window*, or use `sf apex run`.
@@ -183,7 +183,7 @@ The whole chain is Salesforce → saas-proxy → nks-foreldreansvar → PDL. saa
 try {
     HttpResponse response = NKS_ForeldreansvarService.barn('<synthetic parent ident>');
     System.debug('Status: ' + response.getStatusCode());
-    System.debug('Body: ' + response.getBody()); // {"barn":[{"ident":...,"fornavn":...,"etternavn":...,"foedselsdato":...,"foedselsaar":...}]}
+    System.debug('Body: ' + response.getBody()); // {"barn":[{"ident":...,"fornavn":...,"etternavn":...,"foedselsdato":...,"foedselsaar":...,"alder":...}]}
 } catch (NKS_ForeldreansvarService.ForeldreansvarException e) {
     // Thrown for statuses other than 2xx and 404. The response is logged in Application_Log__c with the LoggId.
     System.debug('Failed: ' + e.getMessage());
