@@ -10,6 +10,8 @@ version = '0.0.1'
 
 repositories {
     mavenCentral()
+    // Confluent's Avro serializer (used to read pdl.leesah-v1) is only published here.
+    maven { url = 'https://packages.confluent.io/maven/' }
 }
 
 kotlin {
@@ -33,6 +35,8 @@ dependencies {
     implementation 'io.ktor:ktor-client-cio:3.6.0'
     implementation 'io.ktor:ktor-client-content-negotiation:3.6.0'
     implementation 'ch.qos.logback:logback-classic:1.5.34'
+    // Brings in Confluent's build of kafka-clients (x.y.z-ccs) that matches the serializer, so we don't pin kafka-clients ourselves.
+    implementation 'io.confluent:kafka-avro-serializer:8.3.2'
 
     testImplementation 'io.ktor:ktor-server-test-host:3.6.0'
     testImplementation 'io.ktor:ktor-client-mock:3.6.0'

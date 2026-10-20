@@ -17,15 +17,19 @@ spec:
     max: 4
     min: 1
   resources:
+    # The Kafka client and Avro need more memory than the HTTP API alone.
     limits:
-        memory: 160Mi
+      memory: 512Mi
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 256Mi
   azure:
     application:
       enabled: true
       tenant: trygdeetaten.no # Entra ID dev tenant
+  # Gives us Kafka credentials and schema registry access (KAFKA_* env vars). Topic access is granted by the topic owner's ACL.
+  kafka:
+    pool: nav-dev
   env:
     # PDL in dev-fss, reached from dev-gcp through its public ingress.
     - name: PDL_URL
@@ -36,6 +40,17 @@ spec:
     # Registered processing purpose for our PDL lookups. Sent as the Behandlingsnummer header.
     - name: PDL_BEHANDLINGSNUMMER
       value: B118
+    # Leesah consumer. Keep it off until PDL has added us to the ACL on pdl.leesah-v1,
+    # otherwise the consumer fails with an authorization error and the pod restarts in a loop.
+    - name: LEESAH_ENABLED
+      value: "false"
+    - name: LEESAH_TOPIC
+      value: pdl.leesah-v1
+    # Comma-separated. FORELDREANSVAR_V1 is not published on Leesah yet; requested from the PDL team.
+    - name: LEESAH_OPPLYSNINGSTYPER
+      value: FORELDREANSVAR_V1
+    - name: LEESAH_ENDRINGSTYPER
+      value: OPPHOERT,ANNULLERT
   accessPolicy:
     outbound:
       # PDL runs in dev-fss (on-prem), so we call it as an external host.
