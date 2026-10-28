@@ -354,4 +354,6 @@ Inside a container, `localhost` is the container itself, so it cannot reach a mo
 
 The multi-stage build runs checks and packages the application and resources into an executable JAR. The final image uses distroless Java 21 and runs as a non-root user.
 
-Pushes to `main` build and publish the Docker image, then deploy using `.nais/app.yaml`. Nais uses `/internal/isalive` (liveness) and `/internal/isready` (readiness) as health probes.
+Builds and deployments run only when manually invoked, not on pushes. The workflow builds and publishes the Docker image, then deploys using `.nais/app.yaml`. Nais uses `/internal/isalive` (liveness) and `/internal/isready` (readiness) as health probes.
+
+To build and deploy, open **Actions > Build and deploy > Run workflow** on GitHub, select `main`, and click **Run workflow**. The manual trigger becomes available once the workflow change is merged into `main`. Runs deploy to `dev-gcp`.
