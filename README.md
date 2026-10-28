@@ -1,5 +1,7 @@
 # nks-foreldreansvar
 
+[![Build and deploy](https://github.com/navikt/nks-foreldreansvar/actions/workflows/main.yaml/badge.svg)](https://github.com/navikt/nks-foreldreansvar/actions/workflows/main.yaml)
+
 A Kotlin application using [Ktor](https://ktor.io) with the Netty engine. It uses Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter and Shadow.
 
 The app exposes the health endpoints Nais needs, `POST /api/foreldreansvar/barn` and `POST /api/foreldreansvar/verifiser` (foreldreansvar and persons from [PDL](#pdl), see [API](#api)). All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). Kafka and observability will be added later.
