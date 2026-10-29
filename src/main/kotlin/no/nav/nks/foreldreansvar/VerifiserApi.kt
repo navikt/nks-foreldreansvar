@@ -37,11 +37,12 @@ enum class Verifisering {
     IKKE_FORELDREANSVAR,
     BARN_IKKE_FUNNET,
     BARN_BESKYTTET,
+    BARN_DOED,
 }
 
 /**
  * Checks, in order: the parent has no kode 6/7, the child is in the parent's foreldreansvar, and the child is found in
- * PDL without kode 6/7. [hentBarn] is only called when the parent checks pass, so we don't look up the child needlessly.
+ * PDL alive and without kode 6/7. [hentBarn] is only called when the parent checks pass, so we don't look up the child needlessly.
  */
 suspend fun verifiser(
     forelder: Forelder,
@@ -51,5 +52,9 @@ suspend fun verifiser(
     if (forelder.adressebeskyttelse.erBeskyttet()) return Verifisering.FORELDER_BESKYTTET
     if (!forelder.foreldreansvar.kanRepresentere(barnIdent)) return Verifisering.IKKE_FORELDREANSVAR
     val barn = hentBarn(barnIdent) ?: return Verifisering.BARN_IKKE_FUNNET
-    return if (barn.erBeskyttet()) Verifisering.BARN_BESKYTTET else Verifisering.OK
+    return when {
+        barn.erBeskyttet() -> Verifisering.BARN_BESKYTTET
+        barn.erDoed() -> Verifisering.BARN_DOED
+        else -> Verifisering.OK
+    }
 }

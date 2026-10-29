@@ -16,8 +16,16 @@ data class PersonBolkResultat(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class BolkPerson(
     val adressebeskyttelse: List<Adressebeskyttelse> = emptyList(),
+    // Empty when the person is alive.
+    val doedsfall: List<Doedsfall> = emptyList(),
     val foedselsdato: List<Foedselsdato> = emptyList(),
     val navn: List<BolkNavn> = emptyList(),
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class Doedsfall(
+    // ISO date (yyyy-MM-dd). May be missing even when the death is registered.
+    val doedsdato: String?,
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)

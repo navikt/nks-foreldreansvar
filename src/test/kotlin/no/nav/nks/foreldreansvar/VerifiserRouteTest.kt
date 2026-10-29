@@ -90,6 +90,18 @@ class VerifiserRouteTest {
     }
 
     @Test
+    fun `dead child cannot be represented`() {
+        val pdl =
+            FakePdl(bolk = {
+                respondJson(
+                    """{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"ok","person":{"doedsfall":[{"doedsdato":"2024-01-01"}]}}]}}""",
+                )
+            }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
+
+        assertKanRepresentere(false, post(pdl, body(forelderIdent, barnIdent)))
+    }
+
+    @Test
     fun `child not found in PDL cannot be represented`() {
         val pdl =
             FakePdl(bolk = {

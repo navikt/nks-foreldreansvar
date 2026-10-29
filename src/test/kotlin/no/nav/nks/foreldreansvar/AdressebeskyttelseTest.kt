@@ -3,6 +3,7 @@ package no.nav.nks.foreldreansvar
 import kotlinx.coroutines.runBlocking
 import no.nav.nks.foreldreansvar.pdl.Adressebeskyttelse
 import no.nav.nks.foreldreansvar.pdl.BolkPerson
+import no.nav.nks.foreldreansvar.pdl.Doedsfall
 import no.nav.nks.foreldreansvar.pdl.Forelder
 import no.nav.nks.foreldreansvar.pdl.Foreldreansvar
 import no.nav.nks.foreldreansvar.pdl.PersonBolkResultat
@@ -66,6 +67,8 @@ class AdressebeskyttelseTest {
             assertEquals(Verifisering.IKKE_FORELDREANSVAR, verifiser(forelder(), "20202012345") { error("not called") })
             assertEquals(Verifisering.BARN_IKKE_FUNNET, verifiser(forelder(), BARN) { null })
             assertEquals(Verifisering.BARN_BESKYTTET, verifiser(forelder(), BARN) { bolk("STRENGT_FORTROLIG_UTLAND") })
+            val doed = PersonBolkResultat(BARN, "ok", BolkPerson(doedsfall = listOf(Doedsfall(null))))
+            assertEquals(Verifisering.BARN_DOED, verifiser(forelder(), BARN) { doed })
         }
     }
 

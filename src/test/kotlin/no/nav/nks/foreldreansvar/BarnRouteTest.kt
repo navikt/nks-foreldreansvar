@@ -165,6 +165,25 @@ class BarnRouteTest {
     }
 
     @Test
+    fun `dead children are left out`() {
+        val pdl =
+            FakePdl(bolk = {
+                respondJson(
+                    """{"data":{"hentPersonBolk":[
+                       {"ident":"10101012345","code":"ok","person":{"doedsfall":[{"doedsdato":"2024-01-01"}]}},
+                       {"ident":"20202012345","code":"ok","person":{"doedsfall":[]}},
+                       {"ident":"30303012345","code":"ok","person":{"doedsfall":[{"doedsdato":null}]}}
+                    ]}}""",
+                )
+            }) { respondJson(pdlResource("foreldreansvar-forelder.json")) }
+
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(listOf("20202012345"), mapper.readTree(response.body)["barn"].map { it["ident"].asText() })
+    }
+
+    @Test
     fun `no children found in bolk returns empty list`() {
         val pdl =
             FakePdl(bolk = {

@@ -128,7 +128,7 @@ Response `200 OK`:
 - Children PDL does not return with `code: ok` (e.g. `not_found`) are left out. Only the codes are logged.
 - No children gives `200` with an empty list. If the parent does not exist in PDL, the response is `404`.
 - Kode 6/7 (see [Adressebeskyttelse](#adressebeskyttelse-kode-67)): if the parent is protected, the response is `200` with an empty list and the children are not looked up. Protected children are left out.
-- For now we return dead children too.
+- Children with a death registered in PDL (`doedsfall`) are left out, with or without a `doedsdato`.
 - The order follows the parent's foreldreansvar.
 - The response classes (`BarnApi.kt`) are separate from the PDL classes (`pdl/`), so changing a PDL query does not silently change the contract with Salesforce.
 
@@ -150,11 +150,11 @@ Response `200 OK`:
 { "kanRepresentere": true }
 ```
 
-- We look up the parent the same way as `POST /api/foreldreansvar/barn` (`historikk = false`). `kanRepresentere` is `true` only if the parent has no kode 6/7, `barnIdent` is an `ansvarssubjekt` in the parent's foreldreansvar, and the child is found in PDL without kode 6/7 (see [Adressebeskyttelse](#adressebeskyttelse-kode-67)). Otherwise it is `false`.
+- We look up the parent the same way as `POST /api/foreldreansvar/barn` (`historikk = false`). `kanRepresentere` is `true` only if the parent has no kode 6/7, `barnIdent` is an `ansvarssubjekt` in the parent's foreldreansvar, and the child is found in PDL alive and without kode 6/7 (see [Adressebeskyttelse](#adressebeskyttelse-kode-67)). Otherwise it is `false`.
 - The child is looked up with `hentPersonBolk` only when the parent checks pass. If PDL does not return the child, the answer is `false`.
 - Salesforce relies on this endpoint as its backend check, so it must stay strict.
 - Both `true` and `false` are `200`. If the parent does not exist in PDL, the response is `404` (see [Errors](#errors)), so an unknown ident is not mixed up with a parent without foreldreansvar for the child.
-- `ansvar` values, age, death and fallbacks when `ansvarlig` is empty are not considered yet.
+- `ansvar` values, age and fallbacks when `ansvarlig` is empty are not considered yet.
 
 ### Adressebeskyttelse (kode 6/7)
 
@@ -235,7 +235,7 @@ Check the app logs in [Grafana/Loki](https://grafana.nav.cloud.nais.io) or with 
 
 ## PDL
 
-The app reads parental responsibility (*foreldreansvar*) from [PDL](https://pdl-docs.ansatt.nav.no/) and the parent's adressebeskyttelse with `PdlClient.hentForelder(ident, historikk)`, and adressebeskyttelse, names and birth data for several persons with `PdlClient.hentPersonBolk(identer, historikk)`. Both endpoints use both. `historikk` applies to foreldreansvar and names; adressebeskyttelse is always current.
+The app reads parental responsibility (*foreldreansvar*) from [PDL](https://pdl-docs.ansatt.nav.no/) and the parent's adressebeskyttelse with `PdlClient.hentForelder(ident, historikk)`, and adressebeskyttelse, death, names and birth data for several persons with `PdlClient.hentPersonBolk(identer, historikk)`. Both endpoints use both. `historikk` applies to foreldreansvar and names; adressebeskyttelse is always current.
 
 `hentPersonBolk` only works with a system (M2M) token, which is what we get from Texas. It will not work if we switch to TokenX/on-behalf-of tokens. Results with a `code` other than `ok` are left out, and only the codes are logged.
 

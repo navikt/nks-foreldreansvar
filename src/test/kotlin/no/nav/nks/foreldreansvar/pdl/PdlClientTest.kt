@@ -230,6 +230,7 @@ class PdlClientTest {
         assertEquals("2015-03-01", ola.foedselsdato.single().foedselsdato)
         assertEquals(2015, ola.foedselsdato.single().foedselsaar)
         assertEquals(listOf(Adressebeskyttelse("UGRADERT")), ola.adressebeskyttelse)
+        assertTrue(ola.doedsfall.isEmpty())
         assertTrue(
             result
                 .single { it.ident == "20202012345" }
@@ -245,6 +246,7 @@ class PdlClientTest {
         assertTrue(body.contains(""""variables":{"identer":["10101012345","20202012345","30303012345"],"historikk":false}"""), body)
         assertTrue(body.contains("hentPersonBolkQuery"))
         assertTrue(body.contains("adressebeskyttelse(historikk: false)"))
+        assertTrue(body.contains("doedsfall"))
     }
 
     @Test

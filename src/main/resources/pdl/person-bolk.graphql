@@ -9,6 +9,10 @@ query hentPersonBolkQuery($identer: [ID!]!, $historikk: Boolean!) {
                 gradering
             }
 
+            doedsfall {
+                doedsdato
+            }
+
             foedselsdato {
                 foedselsdato
                 foedselsaar
