@@ -50,14 +50,14 @@ class PdlClient(
 ) {
     private val log = LoggerFactory.getLogger(PdlClient::class.java)
 
-    suspend fun hentForeldreansvar(
+    /** Looks up the parent's adressebeskyttelse and foreldreansvar. [historikk] applies to foreldreansvar only. */
+    suspend fun hentForelder(
         ident: String,
         historikk: Boolean = false,
-    ): List<Foreldreansvar> {
+    ): Forelder {
         val request = GraphQLRequest(FORELDREANSVAR_QUERY, mapOf("ident" to ident, "historikk" to historikk))
         val response = callPdl(request)
-        val person = response.data?.hentPerson ?: throw PdlException.NotFound()
-        return person.foreldreansvar
+        return response.data?.hentPerson ?: throw PdlException.NotFound()
     }
 
     /**
@@ -177,13 +177,8 @@ class PdlClient(
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private data class Data(
-        val hentPerson: HentPerson? = null,
+        val hentPerson: Forelder? = null,
         val hentPersonBolk: List<PersonBolkResultat>? = null,
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private data class HentPerson(
-        val foreldreansvar: List<Foreldreansvar> = emptyList(),
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)

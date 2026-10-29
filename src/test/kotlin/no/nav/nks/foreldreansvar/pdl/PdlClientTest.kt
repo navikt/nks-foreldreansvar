@@ -66,14 +66,15 @@ class PdlClientTest {
     fun `returns foreldreansvar and sends token, behandlingsnummer and variables`() {
         val servers = FakeServers({ respondJson(resource("foreldreansvar-ok.json")) })
 
-        val result = runBlocking { client(servers).hentForeldreansvar(ident, historikk = true) }
+        val result = runBlocking { client(servers).hentForelder(ident, historikk = true) }
 
-        assertEquals(2, result.size)
-        assertEquals("felles", result[0].ansvar)
-        assertEquals("01020312345", result[0].ansvarlig)
-        assertNull(result[0].ansvarligUtenIdentifikator)
-        val utenIdent = result[1].ansvarligUtenIdentifikator!!
-        assertNull(result[1].ansvarlig)
+        assertEquals(2, result.foreldreansvar.size)
+        val foreldreansvar = result.foreldreansvar
+        assertEquals("felles", foreldreansvar[0].ansvar)
+        assertEquals("01020312345", foreldreansvar[0].ansvarlig)
+        assertNull(foreldreansvar[0].ansvarligUtenIdentifikator)
+        val utenIdent = foreldreansvar[1].ansvarligUtenIdentifikator!!
+        assertNull(foreldreansvar[1].ansvarlig)
         assertEquals("Kari", utenIdent.navn!!.fornavn)
         assertEquals("SWE", utenIdent.statsborgerskap)
 
@@ -86,10 +87,32 @@ class PdlClientTest {
     }
 
     @Test
+    fun `reads the parent's adressebeskyttelse and asks only for current values`() {
+        val servers =
+            FakeServers({
+                respondJson("""{"data":{"hentPerson":{"adressebeskyttelse":[{"gradering":"FORTROLIG"}],"foreldreansvar":[]}}}""")
+            })
+
+        val result = runBlocking { client(servers).hentForelder(ident) }
+
+        assertEquals(listOf(Adressebeskyttelse("FORTROLIG")), result.adressebeskyttelse)
+        assertTrue(servers.pdlBodies.single().contains("adressebeskyttelse(historikk: false)"))
+    }
+
+    @Test
+    fun `missing adressebeskyttelse gives an empty list`() {
+        val servers = FakeServers({ respondJson(resource("foreldreansvar-ok.json")) })
+
+        val result = runBlocking { client(servers).hentForelder(ident) }
+
+        assertTrue(result.adressebeskyttelse.isEmpty())
+    }
+
+    @Test
     fun `asks Texas for an Entra ID token for the PDL target`() {
         val servers = FakeServers({ respondJson(resource("foreldreansvar-ok.json")) })
 
-        runBlocking { client(servers).hentForeldreansvar(ident) }
+        runBlocking { client(servers).hentForelder(ident) }
 
         assertEquals(
             mapOf("identity_provider" to "entra_id", "target" to "dev-fss:pdl:pdl-api"),
@@ -107,8 +130,8 @@ class PdlClientTest {
         val client = client(servers)
 
         runBlocking {
-            client.hentForeldreansvar(ident)
-            client.hentForeldreansvar(ident)
+            client.hentForelder(ident)
+            client.hentForelder(ident)
         }
 
         assertEquals(2, servers.texasRequests.size)
@@ -119,28 +142,28 @@ class PdlClientTest {
     fun `not_found error gives NotFound`() {
         val servers = FakeServers({ respondJson(resource("not-found.json")) })
 
-        assertThrows<PdlException.NotFound> { runBlocking { client(servers).hentForeldreansvar(ident) } }
+        assertThrows<PdlException.NotFound> { runBlocking { client(servers).hentForelder(ident) } }
     }
 
     @Test
     fun `unauthorized error gives Unauthorized`() {
         val servers = FakeServers({ respondJson(resource("unauthorized.json")) })
 
-        assertThrows<PdlException.Unauthorized> { runBlocking { client(servers).hentForeldreansvar(ident) } }
+        assertThrows<PdlException.Unauthorized> { runBlocking { client(servers).hentForelder(ident) } }
     }
 
     @Test
     fun `bad_request error gives BadRequest`() {
         val servers = FakeServers({ respondJson(resource("bad-request.json")) })
 
-        assertThrows<PdlException.BadRequest> { runBlocking { client(servers).hentForeldreansvar(ident) } }
+        assertThrows<PdlException.BadRequest> { runBlocking { client(servers).hentForelder(ident) } }
     }
 
     @Test
     fun `error messages never contain the ident`() {
         val servers = FakeServers({ respondJson(resource("not-found.json")) })
 
-        val error = assertThrows<PdlException> { runBlocking { client(servers).hentForeldreansvar(ident) } }
+        val error = assertThrows<PdlException> { runBlocking { client(servers).hentForelder(ident) } }
 
         assertFalse(error.message!!.contains(ident))
     }
@@ -153,9 +176,9 @@ class PdlClientTest {
                 { respondJson(resource("foreldreansvar-ok.json")) },
             )
 
-        val result = runBlocking { client(servers).hentForeldreansvar(ident) }
+        val result = runBlocking { client(servers).hentForelder(ident) }
 
-        assertEquals(2, result.size)
+        assertEquals(2, result.foreldreansvar.size)
         assertEquals("true", servers.texasRequests[1]["skip_cache"])
         assertEquals("Bearer token-2", servers.pdlRequests[1].headers[HttpHeaders.Authorization])
     }
@@ -168,7 +191,7 @@ class PdlClientTest {
                 { respond("", HttpStatusCode.Unauthorized) },
             )
 
-        assertThrows<PdlException.Unauthorized> { runBlocking { client(servers).hentForeldreansvar(ident) } }
+        assertThrows<PdlException.Unauthorized> { runBlocking { client(servers).hentForelder(ident) } }
         assertEquals(2, servers.pdlRequests.size)
     }
 
@@ -176,7 +199,7 @@ class PdlClientTest {
     fun `HTTP 5xx gives Unexpected`() {
         val servers = FakeServers({ respond("oops", HttpStatusCode.ServiceUnavailable) })
 
-        val error = assertThrows<PdlException.Unexpected> { runBlocking { client(servers).hentForeldreansvar(ident) } }
+        val error = assertThrows<PdlException.Unexpected> { runBlocking { client(servers).hentForelder(ident) } }
 
         assertTrue(error.message!!.contains("503"))
     }
@@ -190,7 +213,7 @@ class PdlClientTest {
             })
 
         assertThrows<PdlException.Timeout> {
-            runBlocking { client(servers, timeoutMillis = 100).hentForeldreansvar(ident) }
+            runBlocking { client(servers, timeoutMillis = 100).hentForelder(ident) }
         }
     }
 
@@ -206,6 +229,14 @@ class PdlClientTest {
         assertEquals("Ola", ola.navn.single().fornavn)
         assertEquals("2015-03-01", ola.foedselsdato.single().foedselsdato)
         assertEquals(2015, ola.foedselsdato.single().foedselsaar)
+        assertEquals(listOf(Adressebeskyttelse("UGRADERT")), ola.adressebeskyttelse)
+        assertTrue(
+            result
+                .single { it.ident == "20202012345" }
+                .person!!
+                .adressebeskyttelse
+                .isEmpty(),
+        )
 
         val pdlRequest = servers.pdlRequests.single()
         assertEquals("Bearer token-1", pdlRequest.headers[HttpHeaders.Authorization])
@@ -213,6 +244,7 @@ class PdlClientTest {
         val body = servers.pdlBodies.single()
         assertTrue(body.contains(""""variables":{"identer":["10101012345","20202012345","30303012345"],"historikk":false}"""), body)
         assertTrue(body.contains("hentPersonBolkQuery"))
+        assertTrue(body.contains("adressebeskyttelse(historikk: false)"))
     }
 
     @Test
@@ -241,7 +273,7 @@ class PdlClientTest {
         val httpClient = createHttpClient(engine)
         val client = PdlClient(httpClient, config, TexasTokenClient(httpClient, config.tokenEndpoint))
 
-        assertThrows<PdlException.TokenUnavailable> { runBlocking { client.hentForeldreansvar(ident) } }
+        assertThrows<PdlException.TokenUnavailable> { runBlocking { client.hentForelder(ident) } }
     }
 
     private companion object {

@@ -5,6 +5,10 @@ query hentPersonBolkQuery($identer: [ID!]!, $historikk: Boolean!) {
         ident
         code
         person {
+            adressebeskyttelse(historikk: false) {
+                gradering
+            }
+
             foedselsdato {
                 foedselsdato
                 foedselsaar

@@ -54,8 +54,8 @@ fun List<Foreldreansvar>.barnIdenter(forelderIdent: String): List<String> =
     mapNotNull { it.ansvarssubjekt }.filter { it != forelderIdent }.distinct()
 
 /**
- * Builds the response in the order of [identer]. Children PDL did not return (e.g. `not_found`) are left out.
- * [today] is used to calculate `alder`.
+ * Builds the response in the order of [identer]. Children PDL did not return (e.g. `not_found`) and children with
+ * adressebeskyttelse (kode 6/7) are left out. [today] is used to calculate `alder`.
  */
 fun barnResponse(
     identer: List<String>,
@@ -63,7 +63,7 @@ fun barnResponse(
     today: LocalDate,
 ): BarnResponse {
     val byIdent = personer.associateBy { it.ident }
-    return BarnResponse(identer.mapNotNull { byIdent[it]?.toDto(today) })
+    return BarnResponse(identer.mapNotNull { ident -> byIdent[ident]?.takeUnless { it.erBeskyttet() }?.toDto(today) })
 }
 
 /** Whole years from [foedselsdato] (`yyyy-MM-dd`) to [today], or `null` if missing or unparseable. */

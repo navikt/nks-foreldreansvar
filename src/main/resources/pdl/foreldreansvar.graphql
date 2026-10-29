@@ -1,5 +1,8 @@
 query foreldreansvarQuery($ident: ID!, $historikk: Boolean!) {
     hentPerson(ident: $ident) {
+        adressebeskyttelse(historikk: false) {
+            gradering
+        }
         foreldreansvar(historikk: $historikk) {
             ansvar
             ansvarlig

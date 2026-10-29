@@ -24,7 +24,7 @@ private val testPdlConfig =
 
 /**
  * A real [PdlClient] whose HTTP calls go to fake Texas and PDL servers. Records the bodies sent to PDL.
- * [pdl] answers hentForeldreansvar, [bolk] answers hentPersonBolk.
+ * [pdl] answers hentForelder (hentPerson), [bolk] answers hentPersonBolk.
  */
 class FakePdl(
     timeoutMillis: Long = 10_000,
@@ -65,3 +65,17 @@ fun MockRequestHandleScope.respondJson(
 
 fun pdlResource(name: String): String =
     requireNotNull(FakePdl::class.java.getResource("/pdl/$name")) { "Missing test resource $name" }.readText()
+
+/** The kode 6/7 gradering values. */
+val BESKYTTET = listOf("STRENGT_FORTROLIG", "STRENGT_FORTROLIG_UTLAND", "FORTROLIG")
+
+/** A hentPerson test resource with the parent's adressebeskyttelse set to [gradering]. */
+fun forelderMedAdressebeskyttelse(
+    resource: String,
+    gradering: String,
+): String {
+    val json = pdlResource(resource)
+    val withGradering = json.replaceFirst("\"hentPerson\": {", "\"hentPerson\": {\"adressebeskyttelse\":[{\"gradering\":\"$gradering\"}],")
+    check(withGradering != json) { "Could not add adressebeskyttelse to $resource" }
+    return withGradering
+}

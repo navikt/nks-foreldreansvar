@@ -15,6 +15,7 @@ data class PersonBolkResultat(
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class BolkPerson(
+    val adressebeskyttelse: List<Adressebeskyttelse> = emptyList(),
     val foedselsdato: List<Foedselsdato> = emptyList(),
     val navn: List<BolkNavn> = emptyList(),
 )

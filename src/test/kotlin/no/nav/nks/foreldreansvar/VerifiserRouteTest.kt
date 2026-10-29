@@ -46,16 +46,65 @@ class VerifiserRouteTest {
     fun stop() = mockOAuth2Server.shutdown()
 
     @Test
-    fun `child in the parent's foreldreansvar can be represented`() {
-        val pdl = FakePdl { respondJson(pdlResource("foreldreansvar-ok.json")) }
+    fun `child in the parent's foreldreansvar without adressebeskyttelse can be represented`() {
+        val pdl = FakePdl(bolk = { respondJson(barnBolk("UGRADERT")) }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
 
         val response = post(pdl, body(forelderIdent, barnIdent))
 
-        assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals(mapper.readTree("""{"kanRepresentere":true}"""), mapper.readTree(response.body))
-        val variables = mapper.readTree(pdl.pdlBodies.single())["variables"]
+        assertKanRepresentere(true, response)
+        val variables = mapper.readTree(pdl.pdlBodies[0])["variables"]
         assertEquals(forelderIdent, variables["ident"].asText())
         assertFalse(variables["historikk"].asBoolean())
+        // The child is looked up on its own to get its adressebeskyttelse.
+        val bolkVariables = mapper.readTree(pdl.pdlBodies[1])["variables"]
+        assertEquals(listOf(barnIdent), bolkVariables["identer"].map { it.asText() })
+    }
+
+    @Test
+    fun `child without any adressebeskyttelse entry can be represented`() {
+        val pdl =
+            FakePdl(bolk = {
+                respondJson("""{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"ok","person":{"adressebeskyttelse":[]}}]}}""")
+            }) { respondJson(forelderMedAdressebeskyttelse("foreldreansvar-ok.json", "UGRADERT")) }
+
+        assertKanRepresentere(true, post(pdl, body(forelderIdent, barnIdent)))
+    }
+
+    @Test
+    fun `parent with adressebeskyttelse cannot represent and the child is not looked up`() {
+        for (gradering in BESKYTTET) {
+            val pdl = FakePdl { respondJson(forelderMedAdressebeskyttelse("foreldreansvar-ok.json", gradering)) }
+
+            assertKanRepresentere(false, post(pdl, body(forelderIdent, barnIdent)))
+            assertEquals(1, pdl.pdlBodies.size)
+        }
+    }
+
+    @Test
+    fun `child with adressebeskyttelse cannot be represented`() {
+        for (gradering in BESKYTTET) {
+            val pdl = FakePdl(bolk = { respondJson(barnBolk(gradering)) }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
+
+            assertKanRepresentere(false, post(pdl, body(forelderIdent, barnIdent)))
+        }
+    }
+
+    @Test
+    fun `child not found in PDL cannot be represented`() {
+        val pdl =
+            FakePdl(bolk = {
+                respondJson("""{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"not_found","person":null}]}}""")
+            }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
+
+        assertKanRepresentere(false, post(pdl, body(forelderIdent, barnIdent)))
+    }
+
+    @Test
+    fun `child lookup failing returns 502`() {
+        val pdl =
+            FakePdl(bolk = { respond("", HttpStatusCode.InternalServerError) }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
+
+        assertProblem(post(pdl, body(forelderIdent, barnIdent)), HttpStatusCode.BadGateway)
     }
 
     @Test
@@ -148,6 +197,17 @@ class VerifiserRouteTest {
 
             assertEquals(HttpStatusCode.Unauthorized, response.status)
         }
+
+    private fun barnBolk(gradering: String) =
+        """{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"ok","person":{"adressebeskyttelse":[{"gradering":"$gradering"}]}}]}}"""
+
+    private fun assertKanRepresentere(
+        expected: Boolean,
+        response: Response,
+    ) {
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(mapper.readTree("""{"kanRepresentere":$expected}"""), mapper.readTree(response.body))
+    }
 
     private fun body(
         forelder: String,

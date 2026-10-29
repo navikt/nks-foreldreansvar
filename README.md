@@ -23,6 +23,7 @@ src/main/kotlin/no/nav/nks/foreldreansvar/
   ApiRoutes.kt       /api/** routes (require a token)
   BarnApi.kt         Request/response classes and ident validation for POST /api/foreldreansvar/barn
   VerifiserApi.kt    Request/response classes and the check for POST /api/foreldreansvar/verifiser
+  Adressebeskyttelse.kt  The kode 6/7 rule (erBeskyttet), shared by all endpoints
   ErrorHandling.kt   Maps exceptions to RFC 7807 problem-details responses
   pdl/               PDL client: config, Texas token client, GraphQL client, models and errors
   leesah/            Kafka consumer for PDL's pdl.leesah-v1: config, filter, handler and health
@@ -126,7 +127,8 @@ Response `200 OK`:
 - `fornavn`/`etternavn` come from the current name. `foedselsdato` and `foedselsaar` are passed on as PDL returns them. Missing values are `null`. `alder` is whole years from `foedselsdato` to today (Europe/Oslo). It is `null` if `foedselsdato` is missing, since `foedselsaar` alone could give an age that is one year too high.
 - Children PDL does not return with `code: ok` (e.g. `not_found`) are left out. Only the codes are logged.
 - No children gives `200` with an empty list. If the parent does not exist in PDL, the response is `404`.
-- For now we return all children, including children with adressebeskyttelse and dead children.
+- Kode 6/7 (see [Adressebeskyttelse](#adressebeskyttelse-kode-67)): if the parent is protected, the response is `200` with an empty list and the children are not looked up. Protected children are left out.
+- For now we return dead children too.
 - The order follows the parent's foreldreansvar.
 - The response classes (`BarnApi.kt`) are separate from the PDL classes (`pdl/`), so changing a PDL query does not silently change the contract with Salesforce.
 
@@ -148,9 +150,22 @@ Response `200 OK`:
 { "kanRepresentere": true }
 ```
 
-- We look up the parent's foreldreansvar the same way as `POST /api/foreldreansvar/barn` (`historikk = false`). `kanRepresentere` is `true` if `barnIdent` is an `ansvarssubjekt` in that list, otherwise `false`.
+- We look up the parent the same way as `POST /api/foreldreansvar/barn` (`historikk = false`). `kanRepresentere` is `true` only if the parent has no kode 6/7, `barnIdent` is an `ansvarssubjekt` in the parent's foreldreansvar, and the child is found in PDL without kode 6/7 (see [Adressebeskyttelse](#adressebeskyttelse-kode-67)). Otherwise it is `false`.
+- The child is looked up with `hentPersonBolk` only when the parent checks pass. If PDL does not return the child, the answer is `false`.
+- Salesforce relies on this endpoint as its backend check, so it must stay strict.
 - Both `true` and `false` are `200`. If the parent does not exist in PDL, the response is `404` (see [Errors](#errors)), so an unknown ident is not mixed up with a parent without foreldreansvar for the child.
-- For now we only check the list. `ansvar` values, age, death, adressebeskyttelse and fallbacks when `ansvarlig` is empty are not considered yet.
+- `ansvar` values, age, death and fallbacks when `ansvarlig` is empty are not considered yet.
+
+### Adressebeskyttelse (kode 6/7)
+
+If the child has kode 6 or 7, the parents cannot represent the child. If the logged-in parent has kode 6 or 7, they cannot represent anyone.
+
+- Kode 6/7 means PDL `adressebeskyttelse.gradering` is `STRENGT_FORTROLIG`, `STRENGT_FORTROLIG_UTLAND` (kode 6) or `FORTROLIG` (kode 7). No adressebeskyttelse or `UGRADERT` means not protected.
+- **Fail closed:** any other value, or a missing value, counts as protected. A new PDL value can therefore never give access by accident.
+- We only read current values (`adressebeskyttelse(historikk: false)`).
+- The rule is in `Adressebeskyttelse.kt` (`erBeskyttet()`), so every endpoint uses the same rule.
+- Logs only say that a parent or N children were protected, never which idents or which gradering.
+- People who get kode 6/7 while they are using the solution are handled in Salesforce, so the app does not listen for adressebeskyttelse events.
 
 ### Errors
 
@@ -220,7 +235,7 @@ Check the app logs in [Grafana/Loki](https://grafana.nav.cloud.nais.io) or with 
 
 ## PDL
 
-The app reads parental responsibility (*foreldreansvar*) from [PDL](https://pdl-docs.ansatt.nav.no/) with `PdlClient.hentForeldreansvar(ident, historikk)`, and names and birth data for several persons with `PdlClient.hentPersonBolk(identer, historikk)`. `POST /api/foreldreansvar/barn` uses both; `POST /api/foreldreansvar/verifiser` uses `hentForeldreansvar`.
+The app reads parental responsibility (*foreldreansvar*) from [PDL](https://pdl-docs.ansatt.nav.no/) and the parent's adressebeskyttelse with `PdlClient.hentForelder(ident, historikk)`, and adressebeskyttelse, names and birth data for several persons with `PdlClient.hentPersonBolk(identer, historikk)`. Both endpoints use both. `historikk` applies to foreldreansvar and names; adressebeskyttelse is always current.
 
 `hentPersonBolk` only works with a system (M2M) token, which is what we get from Texas. It will not work if we switch to TokenX/on-behalf-of tokens. Results with a `code` other than `ok` are left out, and only the codes are logged.
 
@@ -259,7 +274,7 @@ The queries are in `src/main/resources/pdl/`: `foreldreansvar.graphql` (classes 
 
 1. Edit the `.graphql` file (for example by copying a query from the PDL playground).
 2. Update the matching classes so they match the fields in the query. Unknown fields are ignored, so removing a field from a class is safe.
-3. If you add or rename variables, update the `variables` map in `PdlClient.hentForeldreansvar` or `PdlClient.hentPersonBolk`.
+3. If you add or rename variables, update the `variables` map in `PdlClient.hentForelder` or `PdlClient.hentPersonBolk`.
 4. Update the test responses in `src/test/resources/pdl/` and run `./gradlew check`.
 
 ## Leesah (PDL events on Kafka)

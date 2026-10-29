@@ -18,6 +18,7 @@
         "ident": "10101012345",
         "code": "ok",
         "person": {
+          "adressebeskyttelse": [{ "gradering": "UGRADERT" }],
           "foedselsdato": [{ "foedselsdato": "2015-03-01", "foedselsaar": 2015 }],
           "navn": [{ "fornavn": "Ola", "etternavn": "Nordmann" }]
         }
