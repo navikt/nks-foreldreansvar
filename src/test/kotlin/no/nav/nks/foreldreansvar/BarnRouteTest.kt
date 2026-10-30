@@ -121,6 +121,69 @@ class BarnRouteTest {
     }
 
     @Test
+    fun `parent with adressebeskyttelse gets an empty list without calling bolk`() {
+        for (gradering in BESKYTTET) {
+            val pdl = FakePdl { respondJson(forelderMedAdressebeskyttelse("foreldreansvar-forelder.json", gradering)) }
+
+            val response = postBarn(pdl, """{"ident":"$ident"}""")
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(mapper.readTree("""{"barn":[]}"""), mapper.readTree(response.body), gradering)
+            assertEquals(1, pdl.pdlBodies.size)
+        }
+    }
+
+    @Test
+    fun `parent with UGRADERT gets their children`() {
+        val pdl =
+            FakePdl(bolk = { respondJson(pdlResource("person-bolk-ok.json")) }) {
+                respondJson(forelderMedAdressebeskyttelse("foreldreansvar-forelder.json", "UGRADERT"))
+            }
+
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
+
+        assertEquals(listOf("10101012345", "20202012345"), mapper.readTree(response.body)["barn"].map { it["ident"].asText() })
+    }
+
+    @Test
+    fun `children with adressebeskyttelse are left out`() {
+        val pdl =
+            FakePdl(bolk = {
+                respondJson(
+                    """{"data":{"hentPersonBolk":[
+                       {"ident":"10101012345","code":"ok","person":{"adressebeskyttelse":[{"gradering":"STRENGT_FORTROLIG"}]}},
+                       {"ident":"20202012345","code":"ok","person":{"adressebeskyttelse":[{"gradering":"UGRADERT"}]}},
+                       {"ident":"30303012345","code":"ok","person":{"adressebeskyttelse":[{"gradering":"FORTROLIG"}]}}
+                    ]}}""",
+                )
+            }) { respondJson(pdlResource("foreldreansvar-forelder.json")) }
+
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(listOf("20202012345"), mapper.readTree(response.body)["barn"].map { it["ident"].asText() })
+    }
+
+    @Test
+    fun `dead children are left out`() {
+        val pdl =
+            FakePdl(bolk = {
+                respondJson(
+                    """{"data":{"hentPersonBolk":[
+                       {"ident":"10101012345","code":"ok","person":{"doedsfall":[{"doedsdato":"2024-01-01"}]}},
+                       {"ident":"20202012345","code":"ok","person":{"doedsfall":[]}},
+                       {"ident":"30303012345","code":"ok","person":{"doedsfall":[{"doedsdato":null}]}}
+                    ]}}""",
+                )
+            }) { respondJson(pdlResource("foreldreansvar-forelder.json")) }
+
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(listOf("20202012345"), mapper.readTree(response.body)["barn"].map { it["ident"].asText() })
+    }
+
+    @Test
     fun `no children found in bolk returns empty list`() {
         val pdl =
             FakePdl(bolk = {
