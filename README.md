@@ -279,27 +279,28 @@ The queries are in `src/main/resources/pdl/`: `foreldreansvar.graphql` (classes 
 
 ## Leesah (PDL events on Kafka)
 
-The app reads PDL's event topic `pdl.leesah-v1` ("Livet er en strøm av hendelser") to find out when foreldreansvar ends. Events that match the filter go to `ForeldreansvarHendelseHandler`. For now that's a placeholder that logs `hendelseId` and `endringstype`. Notifying Salesforce is the next step and plugs in there.
+The app reads PDL's event topic `pdl.leesah-v1` ("Livet er en strøm av hendelser") to find out when foreldreansvar changes. Events that match the filter go to `ForeldreansvarHendelseHandler`. For now that's a placeholder that logs metadata only (hendelseId, tidligereHendelseId, endringstype, `ansvar`, whether `ansvarlig` is set, the number of personidenter and whether an fnr was found). Notifying Salesforce is the next step and plugs in there.
 
-> **Status:** PDL does not publish `FORELDREANSVAR_V1` on Leesah yet, and our app is not on the topic's ACL. Both are requested from the PDL team. Until the ACL is in place, `LEESAH_ENABLED` is `false` in `.nais/app.yaml`.
+> **Status:** The consumer is on in dev, and we read all four endringstyper for `FORELDREANSVAR_V1` so we can learn what PDL sends. PDL publishes `FORELDREANSVAR_V1` on Leesah in dev, but the schema change is not on `master` in navikt/pdl yet (navikt/pdl#4473).
 
 ### How it works
 
 - **Avro without generated classes.** Leesah is Avro with a schema registry. We read it as `GenericRecord` and pick out the few top-level fields we need (`Personhendelse.kt`). That way we need no code generation and no GitHub Packages token, and new fields on PDL's side don't break us.
+- **Foreldreansvar.** For `FORELDREANSVAR_V1` the event is about the child. `personidenter` holds the child's aktør-id (13 digits) and fnr (11 digits), and `Personhendelse.fnr` picks the fnr. The optional `foreldreansvar` field has `ansvar` (e.g. `felles`, `mor`) and `ansvarlig` (the parent's fnr, may be null). We read it defensively, so older records without the field give `null`.
 - **Filter.** `LEESAH_OPPLYSNINGSTYPER` and `LEESAH_ENDRINGSTYPER` decide what is relevant. Everything else is read, then ignored.
 - **Offsets.** Auto-commit is off. We commit after each batch is handled, so delivery is *at-least-once*: after a crash, the last batch is read again. The handler must therefore tolerate duplicates (use `hendelseId`). The consumer group is `nks-foreldreansvar-leesah-v1`. Changing it makes the app start over from `auto.offset.reset=latest`.
 - **Errors.** If the handler throws, we retry 3 times with backoff (1 s, 2 s). If it still fails, the consumer stops without committing and `/internal/isalive` returns 503. Nais then restarts the pod, and we continue from the last committed offset. A record that can't be deserialized is logged (partition and offset only) and skipped. There is no dead-letter topic, because a placeholder handler has nothing to park.
 - **Health.** `/internal/isalive` fails if the consumer has stopped because of an error or hasn't polled for 5 minutes. `/internal/isready` only reflects the HTTP API, so a Kafka problem doesn't stop traffic to the API.
-- **Personal data.** The Kafka key (aktør-id) and `personidenter` are never logged. `Personhendelse.toString()` masks them.
+- **Personal data.** The Kafka key (aktør-id), `personidenter` and `ansvarlig` are never logged. `Personhendelse.toString()` and `Foreldreansvar.toString()` mask them.
 
 ### Environment variables
 
 | Variable | Set by | Dev value |
 | --- | --- | --- |
-| `LEESAH_ENABLED` | `.nais/app.yaml` | `false` until the ACL is in place (default `true`) |
+| `LEESAH_ENABLED` | `.nais/app.yaml` | `true` (default `true`) |
 | `LEESAH_TOPIC` | `.nais/app.yaml` | `pdl.leesah-v1` |
 | `LEESAH_OPPLYSNINGSTYPER` | `.nais/app.yaml` | `FORELDREANSVAR_V1` (comma-separated) |
-| `LEESAH_ENDRINGSTYPER` | `.nais/app.yaml` | `OPPHOERT,ANNULLERT` (comma-separated) |
+| `LEESAH_ENDRINGSTYPER` | `.nais/app.yaml` | `OPPRETTET,KORRIGERT,OPPHOERT,ANNULLERT` (comma-separated) |
 | `KAFKA_BROKERS`, `KAFKA_TRUSTSTORE_PATH`, `KAFKA_KEYSTORE_PATH`, `KAFKA_CREDSTORE_PASSWORD`, `KAFKA_SCHEMA_REGISTRY`, `KAFKA_SCHEMA_REGISTRY_USER`, `KAFKA_SCHEMA_REGISTRY_PASSWORD` | Nais (`kafka.pool: nav-dev`) | injected |
 
 When the consumer is enabled, the app does not start if any of them is missing.
