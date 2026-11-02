@@ -1,0 +1,17 @@
+query barnAnsvarligeQuery($ident: ID!) {
+    # Alias, so the response field does not collide with hentPerson in foreldreansvar.graphql.
+    hentBarn: hentPerson(ident: $ident) {
+        adressebeskyttelse(historikk: false) {
+            gradering
+        }
+        foreldreansvar(historikk: false) {
+            ansvar
+            ansvarlig
+            ansvarssubjekt
+        }
+        forelderBarnRelasjon {
+            relatertPersonsIdent
+            relatertPersonsRolle
+        }
+    }
+}
