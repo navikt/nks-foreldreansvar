@@ -40,17 +40,18 @@ spec:
     # Registered processing purpose for our PDL lookups. Sent as the Behandlingsnummer header.
     - name: PDL_BEHANDLINGSNUMMER
       value: B118
-    # Leesah consumer. Keep it off until PDL has added us to the ACL on pdl.leesah-v1,
-    # otherwise the consumer fails with an authorization error and the pod restarts in a loop.
+    # Leesah consumer. PDL has given us read access to pdl.leesah-v1 in dev (navikt/pdl#4450).
+    # Set to "false" to turn the consumer off without a code change.
     - name: LEESAH_ENABLED
-      value: "false"
+      value: "true"
     - name: LEESAH_TOPIC
       value: pdl.leesah-v1
-    # Comma-separated. FORELDREANSVAR_V1 is not published on Leesah yet; requested from the PDL team.
+    # Comma-separated. PDL publishes FORELDREANSVAR_V1 on Leesah in dev.
     - name: LEESAH_OPPLYSNINGSTYPER
       value: FORELDREANSVAR_V1
+    # All four, so we can see in the logs what PDL sends for each kind of change.
     - name: LEESAH_ENDRINGSTYPER
-      value: OPPHOERT,ANNULLERT
+      value: OPPRETTET,KORRIGERT,OPPHOERT,ANNULLERT
   accessPolicy:
     outbound:
       # PDL runs in dev-fss (on-prem), so we call it as an external host.

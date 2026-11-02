@@ -15,17 +15,25 @@ fun interface ForeldreansvarHendelseHandler {
     fun handle(hendelse: Personhendelse)
 }
 
-/** Placeholder until 5.2: logs that a relevant event arrived, without idents. */
+/**
+ * Placeholder until we notify Salesforce: logs what kind of event arrived, so we can learn what PDL sends.
+ * Only metadata is logged. Idents (fnr, aktør-id, ansvarlig) are never logged.
+ */
 class LoggingForeldreansvarHendelseHandler : ForeldreansvarHendelseHandler {
     private val log = LoggerFactory.getLogger(LoggingForeldreansvarHendelseHandler::class.java)
 
     override fun handle(hendelse: Personhendelse) {
         log.info(
-            "Relevant Leesah event: hendelseId={}, opplysningstype={}, endringstype={}, tidligereHendelseId={}",
+            "Relevant Leesah event: hendelseId={}, tidligereHendelseId={}, opplysningstype={}, endringstype={}, " +
+                "ansvar={}, harAnsvarlig={}, antallPersonidenter={}, harFnr={}",
             hendelse.hendelseId,
+            hendelse.tidligereHendelseId,
             hendelse.opplysningstype,
             hendelse.endringstype,
-            hendelse.tidligereHendelseId,
+            hendelse.foreldreansvar?.ansvar,
+            hendelse.foreldreansvar?.ansvarlig != null,
+            hendelse.personidenter.size,
+            hendelse.fnr != null,
         )
     }
 }

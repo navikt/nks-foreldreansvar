@@ -14,6 +14,22 @@
       "type": { "type": "enum", "name": "Endringstype", "symbols": ["OPPRETTET", "KORRIGERT", "ANNULLERT", "OPPHOERT"] }
     },
     { "name": "tidligereHendelseId", "type": ["null", "string"], "default": null },
+    {
+      "name": "foreldreansvar",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "Foreldreansvar",
+          "namespace": "no.nav.person.pdl.leesah.foreldreansvar",
+          "fields": [
+            { "name": "ansvar", "type": "string" },
+            { "name": "ansvarlig", "type": ["null", "string"], "default": null }
+          ]
+        }
+      ],
+      "default": null
+    },
     { "name": "navn", "type": ["null", { "type": "record", "name": "Navn", "fields": [{ "name": "fornavn", "type": "string" }] }], "default": null }
   ]
 }
