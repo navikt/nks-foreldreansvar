@@ -4,7 +4,7 @@
 
 A Kotlin application using [Ktor](https://ktor.io) with the Netty engine. It uses Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter and Shadow.
 
-The app exposes the health endpoints Nais needs, `POST /api/foreldreansvar/barn` and `POST /api/foreldreansvar/verifiser` (foreldreansvar and persons from [PDL](#pdl), see [API](#api)). All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). Kafka and observability will be added later.
+The app exposes the health endpoints Nais needs, `POST /api/foreldreansvar/barn`, `POST /api/foreldreansvar/verifiser` and `POST /api/foreldreansvar/ansvarlige` (foreldreansvar and persons from [PDL](#pdl), see [API](#api)). All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). Kafka and observability will be added later.
 
 ### Why Ktor and Jackson?
 
@@ -23,11 +23,12 @@ src/main/kotlin/no/nav/nks/foreldreansvar/
   ApiRoutes.kt       /api/** routes (require a token)
   BarnApi.kt         Request/response classes and ident validation for POST /api/foreldreansvar/barn
   VerifiserApi.kt    Request/response classes and the check for POST /api/foreldreansvar/verifiser
+  AnsvarligeApi.kt   Request/response classes and hentAnsvarlige() for POST /api/foreldreansvar/ansvarlige
   Adressebeskyttelse.kt  The kode 6/7 rule (erBeskyttet), shared by all endpoints
   ErrorHandling.kt   Maps exceptions to RFC 7807 problem-details responses
   pdl/               PDL client: config, Texas token client, GraphQL client, models and errors
   leesah/            Kafka consumer for PDL's pdl.leesah-v1: config, filter, handler and health
-src/main/resources/pdl/  The GraphQL queries sent to PDL (foreldreansvar, person-bolk)
+src/main/resources/pdl/  The GraphQL queries sent to PDL (foreldreansvar, person-bolk, barn-ansvarlige)
 src/test/kotlin/     Tests using ktor-server-test-host, mock-oauth2-server and Ktor MockEngine
 src/test/resources/pdl/  Recorded PDL-style responses used by the PDL tests
 local/               Config for running mock-oauth2-server locally
@@ -156,6 +157,40 @@ Response `200 OK`:
 - Both `true` and `false` are `200`. If the parent does not exist in PDL, the response is `404` (see [Errors](#errors)), so an unknown ident is not mixed up with a parent without foreldreansvar for the child.
 - `ansvar` values, age and fallbacks when `ansvarlig` is empty are not considered yet.
 
+### `POST /api/foreldreansvar/ansvarlige`
+
+Returns everyone who has foreldreansvar for a child right now. Salesforce uses it for the initial load (Leesah has no history) and on demand, e.g. when a new henvendelse is created on a child. The same lookup, `hentAnsvarlige()`, will be reused when we act on Leesah events.
+
+Request (`Content-Type: application/json`):
+
+```json
+{ "barnIdent": "10101012345" }
+```
+
+`barnIdent` is required and must be exactly 11 digits (same rules as `ident` for `barn`).
+
+Response `200 OK`:
+
+```json
+{
+  "barnIdent": "10101012345",
+  "ansvarlige": [
+    { "ident": "01020312345", "ansvar": "felles" },
+    { "ident": "05060712345", "ansvar": "felles" }
+  ],
+  "hentetTidspunkt": "2026-10-29T10:00:00Z"
+}
+```
+
+- The response is always the **full current state** for the child. An empty `ansvarlige` means: remove all sharing for the child.
+- We look up the child with `hentPerson` (`historikk = false`, so only current foreldreansvar; we do not filter on dates). For each foreldreansvar entry we use `ansvarlig` when it is set. If it is missing, `mor`/`far`/`medmor` resolve to the parent with that role in the child's `forelderBarnRelasjon`, and `felles` resolves to all of them (only roles `MOR`, `FAR` and `MEDMOR`, never `BARN`).
+- Entries that give no ident are skipped: `ansvarligUtenIdentifikator` (no Norwegian ident to share with) and `andre`/`ukjent` without `ansvarlig`.
+- Each person appears once. If they have several entries, the first `ansvar` wins. `ansvar` is passed on as PDL returns it.
+- Kode 6/7 (see [Adressebeskyttelse](#adressebeskyttelse-kode-67)): if the child is protected, `ansvarlige` is empty and the parents are not looked up. Parents are looked up with `hentPersonBolk`. Protected parents, and parents PDL does not return, are left out.
+- `hentetTidspunkt` is when the lookup started, ISO-8601 in UTC.
+- If the child does not exist in PDL, the response is `404`.
+- saas-proxy must allow this path before Salesforce can call it.
+
 ### Adressebeskyttelse (kode 6/7)
 
 If the child has kode 6 or 7, the parents cannot represent the child. If the logged-in parent has kode 6 or 7, they cannot represent anyone.
@@ -179,7 +214,7 @@ Errors use [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) *problem details* 
 |---|---|
 | `400` | `ident`, `forelderIdent` or `barnIdent` missing, blank or not 11 digits; body is not valid JSON; or PDL says the request is invalid (`bad_request`) |
 | `401` | Missing or invalid token (see [Authentication](#authentication)) |
-| `404` | The parent does not exist in PDL |
+| `404` | The parent (or for `ansvarlige`, the child) does not exist in PDL |
 | `500` | We could not get a PDL token from Texas (our own sidecar, so an internal error), or another unexpected error |
 | `502` | PDL denied *our* access, or answered with an error or something we could not read. This is 502 and not 401/403 because the caller did nothing wrong |
 | `504` | PDL did not answer within 10 seconds |
@@ -270,11 +305,11 @@ Idents are personal data. They are sent only as GraphQL variables and are never 
 
 ### Changing the queries
 
-The queries are in `src/main/resources/pdl/`: `foreldreansvar.graphql` (classes in `pdl/Foreldreansvar.kt`) and `person-bolk.graphql` (classes in `pdl/PersonBolk.kt`).
+The queries are in `src/main/resources/pdl/`: `foreldreansvar.graphql` (classes in `pdl/Foreldreansvar.kt`) and `person-bolk.graphql` (classes in `pdl/PersonBolk.kt`) and `barn-ansvarlige.graphql` (classes in `pdl/Barn.kt`).
 
 1. Edit the `.graphql` file (for example by copying a query from the PDL playground).
 2. Update the matching classes so they match the fields in the query. Unknown fields are ignored, so removing a field from a class is safe.
-3. If you add or rename variables, update the `variables` map in `PdlClient.hentForelder` or `PdlClient.hentPersonBolk`.
+3. If you add or rename variables, update the `variables` map in `PdlClient.hentForelder`, `PdlClient.hentPersonBolk` or `PdlClient.hentBarn`.
 4. Update the test responses in `src/test/resources/pdl/` and run `./gradlew check`.
 
 ## Leesah (PDL events on Kafka)

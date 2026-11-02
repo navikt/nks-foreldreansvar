@@ -51,4 +51,11 @@ fun Route.apiRoutes(
         if (resultat != Verifisering.OK) log.info("verifiser: kanRepresentere=false, reason {}", resultat)
         call.respond(VerifiserResponse(kanRepresentere = resultat == Verifisering.OK))
     }
+
+    // Returns everyone with foreldreansvar for the child right now. Salesforce uses it for the initial load and on demand.
+    // Kode 6/7: a protected child gets an empty list, and protected parents are left out. See hentAnsvarlige().
+    post("/foreldreansvar/ansvarlige") {
+        val barnIdent = call.receive<AnsvarligeRequest>().validBarnIdent()
+        call.respond(hentAnsvarlige(pdlClient, barnIdent, clock))
+    }
 }

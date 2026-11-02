@@ -60,6 +60,12 @@ class PdlClient(
         return response.data?.hentPerson ?: throw PdlException.NotFound()
     }
 
+    /** Looks up the child's adressebeskyttelse, foreldreansvar and parents (all current values). */
+    suspend fun hentBarn(ident: String): Barn {
+        val request = GraphQLRequest(BARN_ANSVARLIGE_QUERY, mapOf("ident" to ident))
+        return callPdl(request).data?.hentBarn ?: throw PdlException.NotFound()
+    }
+
     /**
      * Looks up several persons in one call. Returns only results with `code == "ok"`; the rest are left out and
      * only their codes are logged. hentPersonBolk is only available with a system token (Texas M2M), not TokenX/OBO.
@@ -179,6 +185,8 @@ class PdlClient(
     private data class Data(
         val hentPerson: Forelder? = null,
         val hentPersonBolk: List<PersonBolkResultat>? = null,
+        // Alias for hentPerson in barn-ansvarlige.graphql.
+        val hentBarn: Barn? = null,
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -200,6 +208,11 @@ class PdlClient(
         val PERSON_BOLK_QUERY: String =
             requireNotNull(PdlClient::class.java.getResource("/pdl/person-bolk.graphql")) {
                 "Missing resource /pdl/person-bolk.graphql"
+            }.readText()
+
+        val BARN_ANSVARLIGE_QUERY: String =
+            requireNotNull(PdlClient::class.java.getResource("/pdl/barn-ansvarlige.graphql")) {
+                "Missing resource /pdl/barn-ansvarlige.graphql"
             }.readText()
     }
 }
