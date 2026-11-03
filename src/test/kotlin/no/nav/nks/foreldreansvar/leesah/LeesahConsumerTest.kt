@@ -1,6 +1,11 @@
 package no.nav.nks.foreldreansvar.leesah
 
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpStatusCode
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
+import no.nav.nks.foreldreansvar.FakePdl
+import no.nav.nks.foreldreansvar.respondJson
+import no.nav.nks.foreldreansvar.salesforce.FakeSalesforce
 import org.apache.avro.generic.GenericRecord
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.consumer.MockConsumer
@@ -28,6 +33,7 @@ class LeesahConsumerTest {
 
     private val mock = TestConsumer()
     private val handled = mutableListOf<Personhendelse>()
+    private var handlerCalls = 0
     private val sleeps = mutableListOf<Duration>()
     private val health = ConsumerHealth()
     private val meterRegistry = SimpleMeterRegistry()
@@ -41,17 +47,22 @@ class LeesahConsumerTest {
         .counter()
         ?.count() ?: 0.0
 
-    private fun leesahConsumer(handler: ForeldreansvarHendelseHandler = ForeldreansvarHendelseHandler { handled += it }) =
-        LeesahConsumer(
-            consumer = mock,
-            topic = topic,
-            filter = PersonhendelseFilter(setOf("FORELDREANSVAR_V1"), setOf("OPPHOERT", "ANNULLERT")),
-            handler = handler,
-            health = health,
-            pollTimeout = Duration.ofMillis(1),
-            sleep = { sleeps += it },
-            meterRegistry = meterRegistry,
-        )
+    private fun leesahConsumer(
+        handler: ForeldreansvarHendelseHandler =
+            ForeldreansvarHendelseHandler {
+                handlerCalls++
+                handled += it
+            },
+    ) = LeesahConsumer(
+        consumer = mock,
+        topic = topic,
+        filter = PersonhendelseFilter(setOf("FORELDREANSVAR_V1"), setOf("OPPHOERT", "ANNULLERT")),
+        handler = handler,
+        health = health,
+        pollTimeout = Duration.ofMillis(1),
+        sleep = { sleeps += it },
+        meterRegistry = meterRegistry,
+    )
 
     private fun record(
         offset: Long,
@@ -86,6 +97,7 @@ class LeesahConsumerTest {
         )
 
         assertEquals(listOf("a", "d"), handled.map { it.hendelseId })
+        assertEquals(1, handlerCalls, "one call per poll")
         assertEquals(5L, committedOffset())
         assertEquals(5.0, count("leesah.events.read"))
         assertEquals(1.0, count("leesah.events.relevant", "endringstype", "OPPHOERT"))
@@ -155,5 +167,33 @@ class LeesahConsumerTest {
 
         assertTrue(health.isAlive())
         assertTrue(mock.wasClosed)
+    }
+
+    @Test
+    fun `does not commit and reports not alive when Salesforce keeps failing`() {
+        val pdl =
+            FakePdl { respondJson("""{"data":{"hentBarn":{"adressebeskyttelse":[],"foreldreansvar":[],"forelderBarnRelasjon":[]}}}""") }
+        val salesforce = FakeSalesforce { respond("", HttpStatusCode.ServiceUnavailable) }
+
+        runWith(leesahConsumer(AnsvarligeSync(pdl.client, salesforce.client)), record(0, personhendelse()))
+
+        assertEquals(3, salesforce.apexRequests.size)
+        assertEquals(3, salesforce.requests("send", "server_error"))
+        assertEquals(listOf(Duration.ofSeconds(1), Duration.ofSeconds(2)), sleeps)
+        assertNull(committedOffset())
+        assertFalse(health.isAlive())
+    }
+
+    @Test
+    fun `commits once Salesforce has accepted the poll`() {
+        val pdl =
+            FakePdl { respondJson("""{"data":{"hentBarn":{"adressebeskyttelse":[],"foreldreansvar":[],"forelderBarnRelasjon":[]}}}""") }
+        val salesforce = FakeSalesforce()
+
+        runWith(leesahConsumer(AnsvarligeSync(pdl.client, salesforce.client)), record(0, personhendelse()), record(1, personhendelse()))
+
+        assertEquals(1, salesforce.apexRequests.size)
+        assertEquals(2L, committedOffset())
+        assertTrue(health.isAlive())
     }
 }
