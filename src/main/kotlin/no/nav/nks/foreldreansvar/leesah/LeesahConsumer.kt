@@ -1,5 +1,8 @@
 package no.nav.nks.foreldreansvar.leesah
 
+import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.binder.kafka.KafkaClientMetrics
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.apache.avro.generic.GenericRecord
 import org.apache.kafka.clients.consumer.Consumer
 import org.apache.kafka.clients.consumer.ConsumerRecord
@@ -22,6 +25,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  *   committing and [health] reports not alive, so Nais restarts the pod and the batch is read again.
  * - A record we can't deserialize is logged (partition/offset only) and skipped.
  *
+ * Metrics (no idents in names or tags): `leesah_events_read_total`, `leesah_events_relevant_total{endringstype}`,
+ * `leesah_handler_failures_total`, `leesah_records_skipped_total`, and Kafka's own consumer metrics such as
+ * `kafka_consumer_fetch_manager_records_lag_max` (consumer lag).
+ *
  * KafkaConsumer is not thread-safe, so everything except [stop] runs on the consumer's own thread.
  */
 class LeesahConsumer(
@@ -36,8 +43,15 @@ class LeesahConsumer(
     private val statsInterval: Duration = Duration.ofMinutes(5),
     private val clock: Clock = Clock.systemUTC(),
     private val sleep: (Duration) -> Unit = { Thread.sleep(it.toMillis()) },
+    private val meterRegistry: MeterRegistry = SimpleMeterRegistry(),
 ) {
     private val log = LoggerFactory.getLogger(LeesahConsumer::class.java)
+    private val eventsRead = meterRegistry.counter("leesah.events.read")
+    private val handlerFailures = meterRegistry.counter("leesah.handler.failures")
+    private val recordsSkipped = meterRegistry.counter("leesah.records.skipped")
+
+    // Reads the Kafka client's own metrics, including consumer lag per partition. Closed together with the consumer.
+    private val kafkaMetrics = KafkaClientMetrics(consumer).also { it.bindTo(meterRegistry) }
     private val running = AtomicBoolean(true)
     private var thread: Thread? = null
 
@@ -74,6 +88,7 @@ class LeesahConsumer(
         } finally {
             // Still meant to be running means we stopped because of an error.
             if (running.get()) health.failed()
+            kafkaMetrics.close()
             consumer.close()
             log.info("Leesah consumer closed")
         }
@@ -85,6 +100,7 @@ class LeesahConsumer(
         } catch (e: RecordDeserializationException) {
             // Everything before this record is already handled and committed, so it's safe to commit past it.
             val next = e.offset() + 1
+            recordsSkipped.increment()
             log.warn("Skipping Leesah record we could not read: partition={}, offset={}", e.topicPartition(), e.offset())
             consumer.seek(e.topicPartition(), next)
             consumer.commitSync(mapOf(e.topicPartition() to OffsetAndMetadata(next)))
@@ -93,11 +109,13 @@ class LeesahConsumer(
 
     private fun process(record: ConsumerRecord<String, GenericRecord>) {
         read++
+        eventsRead.increment()
         // The key is an aktør-id, so it's never used or logged here.
         val value = record.value() ?: return
         if (!filter.matches(value)) return
         matched++
         val hendelse = Personhendelse.fra(value)
+        meterRegistry.counter("leesah.events.relevant", "endringstype", hendelse.endringstype).increment()
         handleWithRetry(hendelse)
     }
 
@@ -108,6 +126,7 @@ class LeesahConsumer(
                 handler.handle(hendelse)
                 return
             } catch (e: Exception) {
+                handlerFailures.increment()
                 log.warn(
                     "Handling Leesah event failed (attempt {} of {}): hendelseId={}, error={}",
                     attempt + 1,
@@ -136,6 +155,7 @@ class LeesahConsumer(
             config: LeesahConfig,
             handler: ForeldreansvarHendelseHandler,
             health: ConsumerHealth,
+            meterRegistry: MeterRegistry,
         ): LeesahConsumer =
             LeesahConsumer(
                 consumer = KafkaConsumer(config.consumerProperties()),
@@ -143,6 +163,7 @@ class LeesahConsumer(
                 filter = PersonhendelseFilter(config.opplysningstyper, config.endringstyper),
                 handler = handler,
                 health = health,
+                meterRegistry = meterRegistry,
             )
     }
 }

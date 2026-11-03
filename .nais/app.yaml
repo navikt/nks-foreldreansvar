@@ -13,6 +13,10 @@ spec:
   readiness:
     path: /internal/isready
     initialDelay: 10
+  # Nais' Prometheus scrapes this; the metrics show up in Grafana.
+  prometheus:
+    enabled: true
+    path: /internal/metrics
   replicas:
     max: 4
     min: 1

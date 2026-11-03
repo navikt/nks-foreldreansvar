@@ -4,7 +4,7 @@
 
 A Kotlin application using [Ktor](https://ktor.io) with the Netty engine. It uses Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter and Shadow.
 
-The app exposes the health endpoints Nais needs, `POST /api/foreldreansvar/barn`, `POST /api/foreldreansvar/verifiser` and `POST /api/foreldreansvar/ansvarlige` (foreldreansvar and persons from [PDL](#pdl), see [API](#api)). All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). Kafka and observability will be added later.
+The app exposes the health endpoints Nais needs, `POST /api/foreldreansvar/barn`, `POST /api/foreldreansvar/verifiser` and `POST /api/foreldreansvar/ansvarlige` (foreldreansvar and persons from [PDL](#pdl), see [API](#api)). All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). It also reads PDL events from Kafka (see [Leesah](#leesah-pdl-events-on-kafka)), logs JSON and exposes Prometheus metrics (see [Observability](#observability)).
 
 ### Why Ktor and Jackson?
 
@@ -19,7 +19,7 @@ src/main/kotlin/no/nav/nks/foreldreansvar/
   Application.kt     Application.module(): installs plugins (JSON, error handling, auth) and routes
   AzureConfig.kt     Entra ID settings read from env vars injected by Nais
   Auth.kt            JWT validation of Entra ID machine-to-machine tokens
-  InternalRoutes.kt  /internal/isalive and /internal/isready (open). isalive also reflects the Leesah consumer
+  InternalRoutes.kt  /internal/isalive, /internal/isready and /internal/metrics (open). isalive also reflects the Leesah consumer
   ApiRoutes.kt       /api/** routes (require a token)
   BarnApi.kt         Request/response classes and ident validation for POST /api/foreldreansvar/barn
   VerifiserApi.kt    Request/response classes and the check for POST /api/foreldreansvar/verifiser
@@ -28,6 +28,7 @@ src/main/kotlin/no/nav/nks/foreldreansvar/
   ErrorHandling.kt   Maps exceptions to RFC 7807 problem-details responses
   pdl/               PDL client: config, Texas token client, GraphQL client, models and errors
   leesah/            Kafka consumer for PDL's pdl.leesah-v1: config, filter, handler and health
+src/main/resources/logback.xml  Logging: JSON by default, plain text with LOG_FORMAT=plain
 src/main/resources/pdl/  The GraphQL queries sent to PDL (foreldreansvar, person-bolk, barn-ansvarlige)
 src/test/kotlin/     Tests using ktor-server-test-host, mock-oauth2-server and Ktor MockEngine
 src/test/resources/pdl/  Recorded PDL-style responses used by the PDL tests
@@ -344,6 +345,44 @@ When the consumer is enabled, the app does not start if any of them is missing.
 
 The tests use Kafka's `MockConsumer` and Confluent's in-memory schema registry (`mock://`), so they need no Docker. `src/test/resources/leesah/personhendelse-test.avsc` is a test-only subset of PDL's schema.
 
+## Observability
+
+### Logs
+
+On Nais the app logs one JSON object per line ([logstash-logback-encoder](https://github.com/logfellow/logstash-logback-encoder)). Grafana/Loki then reads `level`, `logger_name`, `thread_name` and `message` as fields, so you can filter on the real log level. With plain text, every line showed up as INFO. Set `LOG_FORMAT=plain` to get readable text locally; tests always log plain text (`src/test/resources/logback-test.xml`).
+
+Kafka (`org.apache.kafka`, `io.confluent`) logs at WARN, everything else at INFO.
+
+Idents (fnr, aktør-id) are never logged, only counts, codes and decisions. If we ever need idents in logs, they must go to [team logs](https://doc.nais.io/observability/logging/how-to/team-logs/), not the normal log.
+
+### Metrics
+
+`GET /internal/metrics` returns all metrics in Prometheus format. It is open like the other `/internal` routes, and Nais scrapes it (`prometheus` in `.nais/app.yaml`). Find the metrics in [Grafana](https://grafana.nav.cloud.nais.io) (Explore, Prometheus data source for dev-gcp), filtered on `app="nks-foreldreansvar"`.
+
+| Metric | What it shows |
+|---|---|
+| `ktor_http_server_requests_seconds_*{route, method, status}` | HTTP requests to the app: count and duration |
+| `jvm_*`, `process_*`, `system_*` | Memory, GC, threads and CPU |
+| `pdl_requests_seconds_*{operation, outcome}` | Calls to PDL. `operation`: `hentForelder`, `hentBarn`, `hentPersonBolk`. `outcome`: `ok`, `not_found`, `unauthorized`, `bad_request`, `token_unavailable`, `timeout`, `error` |
+| `leesah_events_read_total` | Events read from `pdl.leesah-v1` |
+| `leesah_events_relevant_total{endringstype}` | Events that matched the filter and went to the handler |
+| `leesah_handler_failures_total` | Failed handler attempts (each retry counts) |
+| `leesah_records_skipped_total` | Records we could not deserialize and skipped |
+| `kafka_consumer_fetch_manager_records_lag_max` and other `kafka_consumer_*` | The Kafka client's own metrics, e.g. consumer lag |
+
+Metric names and tags never contain idents.
+
+Example queries:
+
+```promql
+# PDL calls per minute by outcome
+sum by (outcome) (rate(pdl_requests_seconds_count{app="nks-foreldreansvar"}[5m])) * 60
+# How far behind the Leesah consumer is
+max(kafka_consumer_fetch_manager_records_lag_max{app="nks-foreldreansvar"})
+```
+
+Not set up yet: alerts, dashboards and tracing (OpenTelemetry via Nais auto-instrumentation).
+
 ## Run locally
 
 With Java 17 or newer installed to run Gradle 9 (the Gradle wrapper downloads Gradle automatically). The app compiles with a Java 21 toolchain; if Java 21 is not installed, Gradle downloads it automatically.
@@ -367,11 +406,14 @@ export PDL_URL=http://localhost:9999/graphql PDL_TARGET=local:pdl:pdl-api PDL_BE
 export NAIS_TOKEN_ENDPOINT=http://localhost:9999/token
 # There is no Kafka locally.
 export LEESAH_ENABLED=false
+# Readable logs instead of JSON.
+export LOG_FORMAT=plain
 ./gradlew run
 ```
 
 ```sh
 curl http://localhost:8080/internal/isalive
+curl http://localhost:8080/internal/metrics
 curl -i -X POST http://localhost:8080/api/foreldreansvar/barn   # 401
 
 TOKEN=$(curl -s -X POST http://localhost:8081/azuread/token \

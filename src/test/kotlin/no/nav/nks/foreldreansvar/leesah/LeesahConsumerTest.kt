@@ -1,5 +1,6 @@
 package no.nav.nks.foreldreansvar.leesah
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.apache.avro.generic.GenericRecord
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.consumer.MockConsumer
@@ -29,6 +30,16 @@ class LeesahConsumerTest {
     private val handled = mutableListOf<Personhendelse>()
     private val sleeps = mutableListOf<Duration>()
     private val health = ConsumerHealth()
+    private val meterRegistry = SimpleMeterRegistry()
+
+    private fun count(
+        name: String,
+        vararg tags: String,
+    ) = meterRegistry
+        .find(name)
+        .tags(*tags)
+        .counter()
+        ?.count() ?: 0.0
 
     private fun leesahConsumer(handler: ForeldreansvarHendelseHandler = ForeldreansvarHendelseHandler { handled += it }) =
         LeesahConsumer(
@@ -39,6 +50,7 @@ class LeesahConsumerTest {
             health = health,
             pollTimeout = Duration.ofMillis(1),
             sleep = { sleeps += it },
+            meterRegistry = meterRegistry,
         )
 
     private fun record(
@@ -75,6 +87,9 @@ class LeesahConsumerTest {
 
         assertEquals(listOf("a", "d"), handled.map { it.hendelseId })
         assertEquals(5L, committedOffset())
+        assertEquals(5.0, count("leesah.events.read"))
+        assertEquals(1.0, count("leesah.events.relevant", "endringstype", "OPPHOERT"))
+        assertEquals(1.0, count("leesah.events.relevant", "endringstype", "ANNULLERT"))
         assertTrue(health.isAlive())
         assertTrue(mock.wasClosed)
     }
@@ -109,6 +124,7 @@ class LeesahConsumerTest {
         runWith(consumer, record(0, personhendelse()))
 
         assertEquals(3, calls)
+        assertEquals(3.0, count("leesah.handler.failures"))
         assertEquals(listOf(Duration.ofSeconds(1), Duration.ofSeconds(2)), sleeps)
         assertNull(committedOffset())
         assertFalse(health.isAlive())
@@ -129,6 +145,7 @@ class LeesahConsumerTest {
 
         assertEquals(8L, mock.position(partition))
         assertEquals(8L, committedOffset())
+        assertEquals(1.0, count("leesah.records.skipped"))
         assertTrue(health.isAlive())
     }
 
