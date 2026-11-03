@@ -2,474 +2,40 @@
 
 [![Build and deploy](https://github.com/navikt/nks-foreldreansvar/actions/workflows/main.yaml/badge.svg)](https://github.com/navikt/nks-foreldreansvar/actions/workflows/main.yaml)
 
-A Kotlin application using [Ktor](https://ktor.io) with the Netty engine. It uses Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter and Shadow.
+Backend for foreldreansvar in Nav Kontaktsenter's Salesforce solution. It looks up parental responsibility (*foreldreansvar*) in [PDL](https://pdl-docs.ansatt.nav.no/) and keeps Salesforce updated when it changes.
 
-The app exposes the health endpoints Nais needs, `POST /api/foreldreansvar/barn`, `POST /api/foreldreansvar/verifiser` and `POST /api/foreldreansvar/ansvarlige` (foreldreansvar and persons from [PDL](#pdl), see [API](#api)). All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). It also reads PDL's [Leesah](#leesah-pdl-events-on-kafka) events and pushes the current foreldreansvar to [Salesforce](#salesforce-push-from-leesah-events), logs JSON and exposes Prometheus metrics (see [Observability](#observability)).
+Kotlin, [Ktor](https://ktor.io), Java 21, Gradle. Runs on [Nais](https://doc.nais.io) (dev-gcp).
 
-### Why Ktor and Jackson?
+## What it does
 
-- **Ktor** is a lightweight Kotlin web framework that is widely used in Nav. An app is built from a `module()` function, where you install *plugins* (such as JSON and auth) and define routes.
-- **Jackson** (`ktor-serialization-jackson`) converts between JSON and Kotlin classes. It is the most common choice in Nav libraries and examples, and it works with ordinary `data class`es without extra annotations or compiler plugins.
+- **API for Salesforce** (via saas-proxy, Entra ID machine-to-machine token):
+  - `POST /api/foreldreansvar/barn`: the children a parent has foreldreansvar for.
+  - `POST /api/foreldreansvar/verifiser`: whether a parent can represent a child.
+  - `POST /api/foreldreansvar/ansvarlige`: everyone with foreldreansvar for a child.
+- **PDL events:** reads `pdl.leesah-v1` and sends the current foreldreansvar for changed children to Salesforce.
+- Persons with adressebeskyttelse (kode 6/7) are always excluded.
+
+Errors use [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) problem details. Health and metrics: `/internal/isalive`, `/internal/isready`, `/internal/metrics`.
+
+Design and operations are documented internally in teamnks' Confluence.
 
 ## Structure
 
 ```text
 src/main/kotlin/no/nav/nks/foreldreansvar/
-  Bootstrap.kt       main(): reads config and starts the Netty server on port 8080
-  Application.kt     Application.module(): installs plugins (JSON, error handling, auth) and routes
-  AzureConfig.kt     Entra ID settings read from env vars injected by Nais
-  Auth.kt            JWT validation of Entra ID machine-to-machine tokens
-  InternalRoutes.kt  /internal/isalive, /internal/isready and /internal/metrics (open). isalive also reflects the Leesah consumer
-  ApiRoutes.kt       /api/** routes (require a token)
-  BarnApi.kt         Request/response classes and ident validation for POST /api/foreldreansvar/barn
-  VerifiserApi.kt    Request/response classes and the check for POST /api/foreldreansvar/verifiser
-  AnsvarligeApi.kt   Request/response classes and hentAnsvarlige() for POST /api/foreldreansvar/ansvarlige
-  Adressebeskyttelse.kt  The kode 6/7 rule (erBeskyttet), shared by all endpoints
-  ErrorHandling.kt   Maps exceptions to RFC 7807 problem-details responses
-  pdl/               PDL client: config, Texas token client, GraphQL client, models and errors
-  leesah/            Kafka consumer for PDL's pdl.leesah-v1: config, filter, handler, health and AnsvarligeSync (event → PDL → Salesforce)
-  salesforce/        Salesforce client: config, JWT bearer token client and the batch POST to our Apex REST endpoint
-src/main/resources/logback.xml  Logging: JSON by default, plain text with LOG_FORMAT=plain
-src/main/resources/pdl/  The GraphQL queries sent to PDL (foreldreansvar, person-bolk, barn-ansvarlige)
-src/test/kotlin/     Tests using ktor-server-test-host, mock-oauth2-server and Ktor MockEngine
-src/test/resources/pdl/  Recorded PDL-style responses used by the PDL tests
-local/               Config for running mock-oauth2-server locally
-.nais/app.yaml       Nais deployment configuration
+  Bootstrap.kt, Application.kt   startup, plugins and routes
+  Auth.kt, AzureConfig.kt        Entra ID token validation
+  *Api.kt, ApiRoutes.kt          the /api endpoints
+  pdl/                           PDL client
+  leesah/                        Kafka consumer for PDL events
+  salesforce/                    Salesforce client
+src/main/resources/pdl/          GraphQL queries
+.nais/app.yaml                   Nais configuration
 ```
-
-## Authentication
-
-Salesforce reaches this app through [saas-proxy](https://github.com/navikt/saas-proxy) (see below). The call to us is machine-to-machine (no user involved): saas-proxy gets an access token for our app from Entra ID (Azure AD) with the *client credentials* flow and sends it as `Authorization: Bearer <token>`. The token's caller (`azp`) is therefore saas-proxy, not Salesforce.
-
-### What Nais does
-
-`.nais/app.yaml` enables `azure.application`. Nais then creates an app registration in Entra ID for us and injects these env vars:
-
-| Variable | Used for |
-|---|---|
-| `AZURE_APP_CLIENT_ID` | Our client ID. Tokens must have it as audience (`aud`). |
-| `AZURE_OPENID_CONFIG_ISSUER` | Expected issuer (`iss`). |
-| `AZURE_OPENID_CONFIG_JWKS_URI` | Public keys used to check the token signature. |
-| `AZURE_APP_PRE_AUTHORIZED_APPS` | JSON list of clients allowed in `accessPolicy.inbound`. |
-
-`accessPolicy.inbound` says who may call us. Entra ID refuses to issue tokens for our app to anyone not listed there.
-
-> **Note:** The inbound rule allows `application: saas-proxy`, `namespace: platforce`. Salesforce does not call us directly, see [How Salesforce reaches the app](#how-salesforce-reaches-the-app).
-
-### What the app checks
-
-`Auth.kt` uses Ktor's `Authentication` plugin with `jwt`. A request to `/api/**` is accepted only if:
-
-1. The signature is valid (key from JWKS) and the token has not expired.
-2. `iss` equals `AZURE_OPENID_CONFIG_ISSUER`.
-3. `aud` equals `AZURE_APP_CLIENT_ID`.
-4. `idtyp` is `app`, meaning a machine-to-machine token and not a user token.
-5. `roles` contains `access_as_application`, the role Nais gives to clients in the access policy.
-6. `azp` (the calling client's ID) is in `AZURE_APP_PRE_AUTHORIZED_APPS`. This limits callers to the access policy without hardcoding saas-proxy's client ID.
-
-Otherwise the app returns `401 Unauthorized`. `/internal/**` is always open, because Nais health checks call it without a token.
-
-### How Salesforce reaches the app
-
-Salesforce runs outside Nav's network and cannot call apps in the cluster directly. It goes through [saas-proxy](https://github.com/navikt/saas-proxy) (team platforce):
-
-```
-Salesforce --(Entra ID token for saas-proxy)--> saas-proxy --(new Entra ID token for us)--> nks-foreldreansvar
-```
-
-1. Salesforce gets a token for saas-proxy and calls `https://saas-proxy.ekstern.dev.nav.no/<our path>`, e.g. `/api/foreldreansvar/barn`, with the header `target-app: nks-foreldreansvar` (and optionally `target-namespace: teamnks`).
-2. saas-proxy checks that the method and path are in its whitelist (`src/main/resources/whitelist/dev.json` in the saas-proxy repo, under `teamnks` → `nks-foreldreansvar`).
-3. saas-proxy fetches a new token for our app *as itself* and forwards the request in-cluster to `http://nks-foreldreansvar.teamnks`.
-4. We validate the token as described above. `azp` is saas-proxy's client ID.
-
-For this to work, three things must be in place:
-
-- **Our app** (`.nais/app.yaml`): inbound rule for `application: saas-proxy`, `namespace: platforce`. Both apps run in dev-gcp, so no `cluster` is needed.
-- **saas-proxy** (`.nais/dev.yaml`): outbound rule for `application: nks-foreldreansvar`, `namespace: teamnks`.
-- **saas-proxy** (`whitelist/dev.json`): the endpoints Salesforce may call, e.g. `"GET /api/.*"`.
-
-The last two are changed by pull request to the saas-proxy repo.
-
-### Calling the app in dev
-
-A client in the access policy (in practice saas-proxy) requests a token from the dev tenant with the scope `api://dev-gcp.teamnks.nks-foreldreansvar/.default`:
-
-```sh
-curl -s -X POST "https://login.microsoftonline.com/trygdeetaten.no/oauth2/v2.0/token" \
-  -d grant_type=client_credentials \
-  -d client_id=<client id> -d client_secret=<client secret> \
-  -d scope=api://dev-gcp.teamnks.nks-foreldreansvar/.default
-```
-
-## API
-
-### `POST /api/foreldreansvar/barn`
-
-Returns the children the parent has parental responsibility (*foreldreansvar*) for right now, with name and birth data from PDL. Salesforce will call it from `NKS_ForeldreansvarService` in [crm-nks-integration](https://github.com/navikt/crm-nks-integration).
-
-Request (`Content-Type: application/json`):
-
-```json
-{ "ident": "01020312345" }
-```
-
-`ident` is the parent's ident. It is required and must be exactly 11 digits. We do not check the mod11 checksum: synthetic test idents do not always pass it, and PDL validates the ident itself.
-
-Response `200 OK`:
-
-```json
-{
-  "barn": [
-    { "ident": "10101012345", "fornavn": "Ola", "etternavn": "Nordmann", "foedselsdato": "2015-03-01", "foedselsaar": 2015, "alder": 10 },
-    { "ident": "20202012345", "fornavn": null, "etternavn": null, "foedselsdato": null, "foedselsaar": 2018, "alder": null }
-  ]
-}
-```
-
-- We look up the parent's foreldreansvar with `historikk = false`, take each `ansvarssubjekt` once (without the parent's own ident), and look the children up with `hentPersonBolk`.
-- `fornavn`/`etternavn` come from the current name. `foedselsdato` and `foedselsaar` are passed on as PDL returns them. Missing values are `null`. `alder` is whole years from `foedselsdato` to today (Europe/Oslo). It is `null` if `foedselsdato` is missing, since `foedselsaar` alone could give an age that is one year too high.
-- Children PDL does not return with `code: ok` (e.g. `not_found`) are left out. Only the codes are logged.
-- No children gives `200` with an empty list. If the parent does not exist in PDL, the response is `404`.
-- Kode 6/7 (see [Adressebeskyttelse](#adressebeskyttelse-kode-67)): if the parent is protected, the response is `200` with an empty list and the children are not looked up. Protected children are left out.
-- Children with a death registered in PDL (`doedsfall`) are left out, with or without a `doedsdato`.
-- The order follows the parent's foreldreansvar.
-- The response classes (`BarnApi.kt`) are separate from the PDL classes (`pdl/`), so changing a PDL query does not silently change the contract with Salesforce.
-
-### `POST /api/foreldreansvar/verifiser`
-
-Answers whether a parent can represent a child. Salesforce calls it with `NKS_ForeldreansvarService.verifiser(forelderIdent, barnIdent)`.
-
-Request (`Content-Type: application/json`):
-
-```json
-{ "forelderIdent": "01020312345", "barnIdent": "10101012345" }
-```
-
-Both fields are required and must be exactly 11 digits (same rules as `ident` for `barn`).
-
-Response `200 OK`:
-
-```json
-{ "kanRepresentere": true }
-```
-
-- We look up the parent the same way as `POST /api/foreldreansvar/barn` (`historikk = false`). `kanRepresentere` is `true` only if the parent has no kode 6/7, `barnIdent` is an `ansvarssubjekt` in the parent's foreldreansvar, and the child is found in PDL alive and without kode 6/7 (see [Adressebeskyttelse](#adressebeskyttelse-kode-67)). Otherwise it is `false`.
-- The child is looked up with `hentPersonBolk` only when the parent checks pass. If PDL does not return the child, the answer is `false`.
-- Salesforce relies on this endpoint as its backend check, so it must stay strict.
-- Both `true` and `false` are `200`. If the parent does not exist in PDL, the response is `404` (see [Errors](#errors)), so an unknown ident is not mixed up with a parent without foreldreansvar for the child.
-- `ansvar` values, age and fallbacks when `ansvarlig` is empty are not considered yet.
-
-### `POST /api/foreldreansvar/ansvarlige`
-
-Returns everyone who has foreldreansvar for a child right now. Salesforce uses it for the initial load (Leesah has no history) and on demand, e.g. when a new henvendelse is created on a child. The same lookup, `hentAnsvarlige()`, will be reused when we act on Leesah events.
-
-Request (`Content-Type: application/json`):
-
-```json
-{ "barnIdent": "10101012345" }
-```
-
-`barnIdent` is required and must be exactly 11 digits (same rules as `ident` for `barn`).
-
-Response `200 OK`:
-
-```json
-{
-  "barnIdent": "10101012345",
-  "ansvarlige": [
-    { "ident": "01020312345", "ansvar": "felles" },
-    { "ident": "05060712345", "ansvar": "felles" }
-  ],
-  "hentetTidspunkt": "2026-10-29T10:00:00Z"
-}
-```
-
-- The response is always the **full current state** for the child. An empty `ansvarlige` means: remove all sharing for the child.
-- We look up the child with `hentPerson` (`historikk = false`, so only current foreldreansvar; we do not filter on dates). For each foreldreansvar entry we use `ansvarlig` when it is set. If it is missing, `mor`/`far`/`medmor` resolve to the parent with that role in the child's `forelderBarnRelasjon`, and `felles` resolves to all of them (only roles `MOR`, `FAR` and `MEDMOR`, never `BARN`).
-- Entries that give no ident are skipped: `ansvarligUtenIdentifikator` (no Norwegian ident to share with) and `andre`/`ukjent` without `ansvarlig`.
-- Each person appears once. If they have several entries, the first `ansvar` wins. `ansvar` is passed on as PDL returns it.
-- Kode 6/7 (see [Adressebeskyttelse](#adressebeskyttelse-kode-67)): if the child is protected, `ansvarlige` is empty and the parents are not looked up. Parents are looked up with `hentPersonBolk`. Protected parents, and parents PDL does not return, are left out.
-- `hentetTidspunkt` is when the lookup started, ISO-8601 in UTC.
-- If the child does not exist in PDL, the response is `404`.
-- saas-proxy must allow this path before Salesforce can call it.
-
-### Adressebeskyttelse (kode 6/7)
-
-If the child has kode 6 or 7, the parents cannot represent the child. If the logged-in parent has kode 6 or 7, they cannot represent anyone.
-
-- Kode 6/7 means PDL `adressebeskyttelse.gradering` is `STRENGT_FORTROLIG`, `STRENGT_FORTROLIG_UTLAND` (kode 6) or `FORTROLIG` (kode 7). No adressebeskyttelse or `UGRADERT` means not protected.
-- **Fail closed:** any other value, or a missing value, counts as protected. A new PDL value can therefore never give access by accident.
-- We only read current values (`adressebeskyttelse(historikk: false)`).
-- The rule is in `Adressebeskyttelse.kt` (`erBeskyttet()`), so every endpoint uses the same rule.
-- Logs only say that a parent or N children were protected, never which idents or which gradering.
-- People who get kode 6/7 while they are using the solution are handled in Salesforce, so the app does not listen for adressebeskyttelse events.
-
-### Errors
-
-Errors use [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) *problem details* with `Content-Type: application/problem+json`:
-
-```json
-{ "type": "about:blank", "title": "Not Found", "status": 404, "detail": "Person not found in PDL" }
-```
-
-| Status | When |
-|---|---|
-| `400` | `ident`, `forelderIdent` or `barnIdent` missing, blank or not 11 digits; body is not valid JSON; or PDL says the request is invalid (`bad_request`) |
-| `401` | Missing or invalid token (see [Authentication](#authentication)) |
-| `404` | The parent (or for `ansvarlige`, the child) does not exist in PDL |
-| `500` | We could not get a PDL token from Texas (our own sidecar, so an internal error), or another unexpected error |
-| `502` | PDL denied *our* access, or answered with an error or something we could not read. This is 502 and not 401/403 because the caller did nothing wrong |
-| `504` | PDL did not answer within 10 seconds |
-
-The mapping is in `ErrorHandling.kt`, using Ktor's `StatusPages` plugin: routes just throw, and one place decides the HTTP response. `detail` is always a fixed text, never the exception message, because some exceptions (such as JSON parse errors) can contain the request body, which contains idents. Logs only contain the exception type and status.
-
-Note: `NKS_ForeldreansvarService.verifiser()` returns the response for `200` and `404`, but throws `ForeldreansvarException` (and logs the response) for other statuses.
-
-### Test end to end from Salesforce (dev)
-
-The whole chain is Salesforce → saas-proxy → nks-foreldreansvar → PDL. saas-proxy allows `POST /api/foreldreansvar/barn` and `POST /api/foreldreansvar/verifiser`, and crm-nks-integration has `NKS_ForeldreansvarService.barn(ident)` and `verifiser(forelderIdent, barnIdent)`.
-
-1. Log in to a Salesforce dev/scratch org where crm-nks-integration is deployed with the `FORELDREANSVAR_API` configuration.
-2. Open the Developer Console → *Debug* → *Open Execute Anonymous Window*, or use `sf apex run`.
-3. Paste the script below and replace the ident with a **synthetic** ident from [Dolly](https://dolly.ekstern.dev.nav.no/) or [Tenor](https://testdata.skatteetaten.no/web/testnorge/) that has foreldreansvar. Never use real idents.
-4. Run it with *Open Log* checked and filter on *Debug Only*.
-
-```apex
-try {
-    HttpResponse response = NKS_ForeldreansvarService.barn('<synthetic parent ident>');
-    System.debug('Status: ' + response.getStatusCode());
-    System.debug('Body: ' + response.getBody()); // {"barn":[{"ident":...,"fornavn":...,"etternavn":...,"foedselsdato":...,"foedselsaar":...,"alder":...}]}
-} catch (NKS_ForeldreansvarService.ForeldreansvarException e) {
-    // Thrown for statuses other than 2xx and 404. The response is logged in Application_Log__c with the LoggId.
-    System.debug('Failed: ' + e.getMessage());
-}
-```
-
-To test `verifiser`, use a synthetic parent and one of the parent's children:
-
-```apex
-try {
-    HttpResponse response = NKS_ForeldreansvarService.verifiser('<synthetic parent ident>', '<synthetic child ident>');
-    System.debug('Status: ' + response.getStatusCode());
-    System.debug('Body: ' + response.getBody()); // {"kanRepresentere":true} or {"kanRepresentere":false}
-} catch (NKS_ForeldreansvarService.ForeldreansvarException e) {
-    System.debug('Failed: ' + e.getMessage());
-}
-```
-
-Expected results:
-
-| Result | Meaning |
-|---|---|
-| `Status: 200` and a `barn` list | The whole chain works |
-| `Status: 404` | Chain works, but PDL does not know the ident |
-| `Failed: ...`, log shows `401` | saas-proxy's token was rejected by us (access policy / pre-authorized apps) |
-| `Failed: ...`, log shows `403` or `404` from saas-proxy | The path is not in saas-proxy's whitelist |
-| `Failed: ...`, log shows `502` | PDL denied our access (behandlingsnummer, PDL access list) or failed |
-| `Failed: ...`, log shows `500` | Texas could not give us a token, see the app logs |
-
-Check the app logs in [Grafana/Loki](https://grafana.nav.cloud.nais.io) or with `kubectl logs -n teamnks -l app=nks-foreldreansvar`.
-
-## PDL
-
-The app reads parental responsibility (*foreldreansvar*) from [PDL](https://pdl-docs.ansatt.nav.no/) and the parent's adressebeskyttelse with `PdlClient.hentForelder(ident, historikk)`, and adressebeskyttelse, death, names and birth data for several persons with `PdlClient.hentPersonBolk(identer, historikk)`. Both endpoints use both. `historikk` applies to foreldreansvar and names; adressebeskyttelse is always current.
-
-`hentPersonBolk` only works with a system (M2M) token, which is what we get from Texas. It will not work if we switch to TokenX/on-behalf-of tokens. Results with a `code` other than `ok` are left out, and only the codes are logged.
-
-### Token: Texas
-
-PDL requires an Entra ID machine-to-machine token. We get it from **Texas**, a token sidecar that Nais starts next to every app with `azure.application.enabled: true`. Nais sets `NAIS_TOKEN_ENDPOINT`, and the app POSTs `identity_provider=entra_id` and `target=dev-fss:pdl:pdl-api` to it ([Nais docs](https://doc.nais.io/auth/entra-id/how-to/consume-m2m/)).
-
-Why Texas instead of calling Entra ID ourselves: Texas holds the client credentials and caches tokens until shortly before they expire, so the app needs no secret, no token cache and no OAuth library. This is the current Nais standard. If PDL answers HTTP 401, the client asks Texas once more with `skip_cache=true` and retries once.
-
-### Network and access
-
-- PDL runs in dev-fss (on-prem). From dev-gcp we reach it through `https://pdl-api.dev-fss-pub.nais.io/graphql`, which is allowed with `accessPolicy.outbound.external` in `.nais/app.yaml`. `outbound.rules` only covers apps in the same GCP environment, so no rule is needed.
-- Each request sends the header `Behandlingsnummer: B118`, the registered purpose for our lookups.
-- PDL must also grant our app access (behandlingsnummer and their own access list). That is a manual request to the PDL team, not something this repo controls. Until it is done, PDL answers `unauthorized`.
-
-### Environment variables
-
-| Variable | Set by | Dev value |
-| --- | --- | --- |
-| `PDL_URL` | `.nais/app.yaml` | `https://pdl-api.dev-fss-pub.nais.io/graphql` |
-| `PDL_TARGET` | `.nais/app.yaml` | `dev-fss:pdl:pdl-api` |
-| `PDL_BEHANDLINGSNUMMER` | `.nais/app.yaml` | `B118` |
-| `NAIS_TOKEN_ENDPOINT` | Nais (Texas) | injected |
-
-The app does not start if any of them is missing.
-
-### Errors and personal data
-
-All failures are thrown as `PdlException`: `NotFound`, `Unauthorized`, `BadRequest`, `TokenUnavailable`, `Timeout` (10 s per request) or `Unexpected` (HTTP 5xx, unknown GraphQL error codes). PDL answers GraphQL errors with HTTP 200 and an `errors` array; the client maps `extensions.code` to these types.
-
-Idents are personal data. They are sent only as GraphQL variables and are never logged or put in exception messages. Logs contain only HTTP status and PDL error codes.
-
-### Changing the queries
-
-The queries are in `src/main/resources/pdl/`: `foreldreansvar.graphql` (classes in `pdl/Foreldreansvar.kt`) and `person-bolk.graphql` (classes in `pdl/PersonBolk.kt`) and `barn-ansvarlige.graphql` (classes in `pdl/Barn.kt`).
-
-1. Edit the `.graphql` file (for example by copying a query from the PDL playground).
-2. Update the matching classes so they match the fields in the query. Unknown fields are ignored, so removing a field from a class is safe.
-3. If you add or rename variables, update the `variables` map in `PdlClient.hentForelder`, `PdlClient.hentPersonBolk` or `PdlClient.hentBarn`.
-4. Update the test responses in `src/test/resources/pdl/` and run `./gradlew check`.
-
-## Leesah (PDL events on Kafka)
-
-The app reads PDL's event topic `pdl.leesah-v1` ("Livet er en strøm av hendelser") to find out when foreldreansvar changes. The events from each poll that match the filter go together to `ForeldreansvarHendelseHandler`. The handler is `AnsvarligeSync`, which looks the children up in PDL and sends the result to Salesforce (see [Salesforce](#salesforce-push-from-leesah-events)).
-
-> **Status:** The consumer is on in dev, and we read all four endringstyper for `FORELDREANSVAR_V1` so we can learn what PDL sends. PDL publishes `FORELDREANSVAR_V1` on Leesah in dev, but the schema change is not on `master` in navikt/pdl yet (navikt/pdl#4473).
-
-### How it works
-
-- **Avro without generated classes.** Leesah is Avro with a schema registry. We read it as `GenericRecord` and pick out the few top-level fields we need (`Personhendelse.kt`). That way we need no code generation and no GitHub Packages token, and new fields on PDL's side don't break us.
-- **Foreldreansvar.** For `FORELDREANSVAR_V1` the event is about the child. `personidenter` holds the child's aktør-id (13 digits) and fnr (11 digits), and `Personhendelse.fnr` picks the fnr. The optional `foreldreansvar` field has `ansvar` (e.g. `felles`, `mor`) and `ansvarlig` (the parent's fnr, may be null). We read it defensively, so older records without the field give `null`.
-- **Filter.** `LEESAH_OPPLYSNINGSTYPER` and `LEESAH_ENDRINGSTYPER` decide what is relevant. Everything else is read, then ignored.
-- **Offsets.** Auto-commit is off. We commit after the handler has handled the whole poll (for us: after Salesforce accepted every batch), so delivery is *at-least-once*: after a crash, the last batch is read again. The handler must therefore tolerate duplicates; ours does, because it always sends the full current state. The consumer group is `nks-foreldreansvar-leesah-v1`. Changing it makes the app start over from `auto.offset.reset=latest`.
-- **Errors.** If the handler throws (PDL or Salesforce down), we retry the whole poll 3 times with backoff (1 s, 2 s). If it still fails, the consumer stops without committing and `/internal/isalive` returns 503. Nais then restarts the pod, and we continue from the last committed offset. A record that can't be deserialized is logged (partition and offset only) and skipped. There is no dead-letter topic: a failing poll is retried until it goes through, and the state we send is always rebuilt from PDL.
-- **Health.** `/internal/isalive` fails if the consumer has stopped because of an error or hasn't polled for 5 minutes. `/internal/isready` only reflects the HTTP API, so a Kafka problem doesn't stop traffic to the API.
-- **Personal data.** The Kafka key (aktør-id), `personidenter` and `ansvarlig` are never logged. `Personhendelse.toString()` and `Foreldreansvar.toString()` mask them.
-
-### Environment variables
-
-| Variable | Set by | Dev value |
-| --- | --- | --- |
-| `LEESAH_ENABLED` | `.nais/app.yaml` | `true` (default `true`) |
-| `LEESAH_TOPIC` | `.nais/app.yaml` | `pdl.leesah-v1` |
-| `LEESAH_OPPLYSNINGSTYPER` | `.nais/app.yaml` | `FORELDREANSVAR_V1` (comma-separated) |
-| `LEESAH_ENDRINGSTYPER` | `.nais/app.yaml` | `OPPRETTET,KORRIGERT,OPPHOERT,ANNULLERT` (comma-separated) |
-| `KAFKA_BROKERS`, `KAFKA_TRUSTSTORE_PATH`, `KAFKA_KEYSTORE_PATH`, `KAFKA_CREDSTORE_PASSWORD`, `KAFKA_SCHEMA_REGISTRY`, `KAFKA_SCHEMA_REGISTRY_USER`, `KAFKA_SCHEMA_REGISTRY_PASSWORD` | Nais (`kafka.pool: nav-dev`) | injected |
-
-When the consumer is enabled, the app does not start if any of them is missing.
-
-### Tests
-
-The tests use Kafka's `MockConsumer` and Confluent's in-memory schema registry (`mock://`), so they need no Docker. `src/test/resources/leesah/personhendelse-test.avsc` is a test-only subset of PDL's schema.
-
-## Salesforce (push from Leesah events)
-
-When foreldreansvar changes for a child, Salesforce gets the child's full current list of ansvarlige, so it can update who the child is shared with.
-
-> **Status:** Built against configuration. The Apex endpoint and the connected app do not exist yet, so dev runs with `SALESFORCE_ENABLED=false` (dry run).
-
-### Flow
-
-**Event = signal, PDL = truth.** A Leesah event only tells us *which* child changed. We never send what the event says; we look up the current state in PDL and send that. Per poll (up to 100 events):
-
-1. Keep the relevant `FORELDREANSVAR_V1` events and group them by the child's fnr. Several events for the same child give one lookup; we keep the `hendelseId` of the one PDL created last. Events without an fnr are skipped (count logged).
-2. Look each child up with `hentAnsvarlige()`, the same code as `POST /api/foreldreansvar/ansvarlige`, so the [kode 6/7 rule](#adressebeskyttelse-kode-67) is the same. A child PDL does not find is sent with no ansvarlige (fail closed). Other PDL errors fail the poll.
-3. Split into batches of 50 and POST each batch to Salesforce.
-4. Commit the Kafka offsets only after Salesforce accepted every batch. If anything fails, the [Leesah retry](#how-it-works) takes over: 3 attempts, then the pod restarts and reads the poll again. Sending a batch twice does no harm, since each element is the full state.
-
-There is no database: Kafka offsets are our only state.
-
-### Payload contract (for the Salesforce team)
-
-`POST {instance_url}{SALESFORCE_ENDPOINT_PATH}` with `Authorization: Bearer <access token>` and `Content-Type: application/json`:
-
-```json
-{
-  "oppdateringer": [
-    {
-      "barnIdent": "10101012345",
-      "ansvarlige": [
-        { "ident": "01020312345", "ansvar": "felles" },
-        { "ident": "05060712345", "ansvar": "felles" }
-      ],
-      "hendelseId": "c1d2e3f4-...",
-      "hentetTidspunkt": "2026-10-29T10:00:00Z"
-    },
-    { "barnIdent": "20202012345", "ansvarlige": [], "hendelseId": "a9b8c7d6-...", "hentetTidspunkt": "2026-10-29T10:00:00Z" }
-  ]
-}
-```
-
-- At most 50 elements per request, each child at most once per request.
-- Each element is the **full current state** for the child: share with exactly these idents, and stop sharing with anyone else. An empty `ansvarlige` means remove all sharing (kode 6/7 child, no one with foreldreansvar, or child not found in PDL).
-- `ansvar` is passed on from PDL (`felles`, `mor`, `far`, `medmor`, `andre`, ...). `hendelseId` is the Leesah event that triggered the lookup, for tracing. `hentetTidspunkt` is when we looked up PDL (ISO-8601, UTC); use it to ignore an element older than what you already have.
-- The same element may arrive more than once (at-least-once), so handling must be idempotent.
-- Answer `2xx` only when the whole batch is stored. Anything else makes us retry the whole poll. A `401` makes us get a new token and try once more.
-- The wrapper object lets Apex bind it directly: `@HttpPost global static void doPost(List<Oppdatering> oppdateringer)`.
-
-### Auth: OAuth 2.0 JWT bearer flow
-
-We act as an integration user through a connected app. We sign a short-lived JWT (RS256, `iss` = consumer key, `sub` = username, `aud` = login URL, `exp` = now + 3 min) with our private key, and trade it at `{SALESFORCE_LOGIN_URL}/services/oauth2/token` for an access token and the `instance_url`. Salesforce checks the signature with the certificate uploaded to the connected app, so no password or client secret is involved. We keep the token in memory until Salesforce answers `401`.
-
-To set it up: create an RSA key pair and a certificate, upload the certificate to the connected app, pre-authorize the integration user, and put the private key (PKCS#8 PEM, `-----BEGIN PRIVATE KEY-----`) in the secret.
-
-### Configuration
-
-| Variable | Set by | Dev value |
-| --- | --- | --- |
-| `SALESFORCE_ENABLED` | `.nais/app.yaml` | `false`. With `false` (or unset) we do everything except the POST and only log counts (dry run) |
-| `SALESFORCE_LOGIN_URL` | `.nais/app.yaml` | `https://test.salesforce.com` (sandbox) or the org's My Domain URL |
-| `SALESFORCE_ENDPOINT_PATH` | `.nais/app.yaml` | e.g. `/services/apexrest/foreldreansvar/v1` |
-| `SALESFORCE_CLIENT_ID` | secret `nks-foreldreansvar-salesforce` | the connected app's consumer key |
-| `SALESFORCE_USERNAME` | secret `nks-foreldreansvar-salesforce` | the integration user |
-| `SALESFORCE_PRIVATE_KEY` | secret `nks-foreldreansvar-salesforce` | PKCS#8 PEM private key |
-
-With `SALESFORCE_ENABLED=true` the app does not start if any of them is missing, so a missing secret never turns sending off silently.
-
-### Turning it on
-
-1. Create the secret in `teamnks` (e.g. in [Nais Console](https://console.nav.cloud.nais.io)) named `nks-foreldreansvar-salesforce` with the three keys above.
-2. In `.nais/app.yaml`: uncomment the `envFrom` block (Nais refuses to start the pod if the secret it points to does not exist), set `SALESFORCE_ENDPOINT_PATH` to the real path, add the instance host (e.g. `<org>.sandbox.my.salesforce.com`) under `accessPolicy.outbound.external`, and set `SALESFORCE_ENABLED` to `"true"`.
-
-### Personal data
-
-Idents are never logged and never put in exception messages; logs only have counts, HTTP status and `hendelseId`. See [Metrics](#metrics) for `salesforce_requests_seconds` and `foreldreansvar_sync_children_total`. Salesforce's response body is not logged either, since it may echo idents.
-
-### Tests
-
-The tests use Ktor `MockEngine` as a fake Salesforce (`FakeSalesforce`) and a fake PDL, and generate an RSA key per run. They cover deduplication, batches of 50, the JWT bearer token request (signature and claims), the 401 retry, no commit when Salesforce keeps failing, and kode 6/7.
-
-## Observability
-
-### Logs
-
-On Nais the app logs one JSON object per line ([logstash-logback-encoder](https://github.com/logfellow/logstash-logback-encoder)). Grafana/Loki then reads `level`, `logger_name`, `thread_name` and `message` as fields, so you can filter on the real log level. With plain text, every line showed up as INFO. Set `LOG_FORMAT=plain` to get readable text locally; tests always log plain text (`src/test/resources/logback-test.xml`).
-
-Kafka (`org.apache.kafka`, `io.confluent`) logs at WARN, everything else at INFO.
-
-Idents (fnr, aktør-id) are never logged, only counts, codes and decisions. If we ever need idents in logs, they must go to [team logs](https://doc.nais.io/observability/logging/how-to/team-logs/), not the normal log.
-
-### Metrics
-
-`GET /internal/metrics` returns all metrics in Prometheus format. It is open like the other `/internal` routes, and Nais scrapes it (`prometheus` in `.nais/app.yaml`). Find the metrics in [Grafana](https://grafana.nav.cloud.nais.io) (Explore, Prometheus data source for dev-gcp), filtered on `app="nks-foreldreansvar"`.
-
-| Metric | What it shows |
-|---|---|
-| `ktor_http_server_requests_seconds_*{route, method, status}` | HTTP requests to the app: count and duration |
-| `jvm_*`, `process_*`, `system_*` | Memory, GC, threads and CPU |
-| `pdl_requests_seconds_*{operation, outcome}` | Calls to PDL. `operation`: `hentForelder`, `hentBarn`, `hentPersonBolk`. `outcome`: `ok`, `not_found`, `unauthorized`, `bad_request`, `token_unavailable`, `timeout`, `error` |
-| `leesah_events_read_total` | Events read from `pdl.leesah-v1` |
-| `leesah_events_relevant_total{endringstype}` | Events that matched the filter and went to the handler |
-| `leesah_handler_failures_total` | Failed handler attempts (each retry counts) |
-| `leesah_records_skipped_total` | Records we could not deserialize and skipped |
-| `salesforce_requests_seconds_*{operation, outcome}` | Calls to Salesforce. `operation`: `token` (JWT bearer token) or `send` (a batch to the Apex endpoint). `outcome`: `ok`, `unauthorized`, `client_error`, `server_error`, `timeout`, `error` |
-| `foreldreansvar_sync_children_total{result, dry_run}` | Children whose state Salesforce accepted (counted after the whole poll is sent). `result`: `with_ansvarlige`, `without_ansvarlige` (none, or kode 6/7), `not_found` (not in PDL, sent with none). `dry_run="true"` while `SALESFORCE_ENABLED=false` |
-| `kafka_consumer_fetch_manager_records_lag_max` and other `kafka_consumer_*` | The Kafka client's own metrics, e.g. consumer lag |
-
-Metric names and tags never contain idents.
-
-Example queries:
-
-```promql
-# PDL calls per minute by outcome
-sum by (outcome) (rate(pdl_requests_seconds_count{app="nks-foreldreansvar"}[5m])) * 60
-# How far behind the Leesah consumer is
-max(kafka_consumer_fetch_manager_records_lag_max{app="nks-foreldreansvar"})
-# Salesforce batches per minute by outcome
-sum by (outcome) (rate(salesforce_requests_seconds_count{app="nks-foreldreansvar", operation="send"}[5m])) * 60
-```
-
-Not set up yet: alerts, dashboards and tracing (OpenTelemetry via Nais auto-instrumentation).
 
 ## Run locally
 
-With Java 17 or newer installed to run Gradle 9 (the Gradle wrapper downloads Gradle automatically). The app compiles with a Java 21 toolchain; if Java 21 is not installed, Gradle downloads it automatically.
-
-The app will not start without the `AZURE_*` and PDL env vars; it stops with an error naming the missing variable. Locally, use [mock-oauth2-server](https://github.com/navikt/mock-oauth2-server) as a fake Entra ID. `local/mock-oauth2-server.json` makes it issue saas-proxy-like tokens for client `saas-proxy-local`:
+Needs Java 17+ to run Gradle; the wrapper downloads Gradle and a Java 21 toolchain. The app stops at startup if a required env var is missing. Use [mock-oauth2-server](https://github.com/navikt/mock-oauth2-server) as a fake Entra ID (`local/mock-oauth2-server.json`):
 
 ```sh
 docker run --rm -p 8081:8080 -e JSON_CONFIG="$(cat local/mock-oauth2-server.json)" \
@@ -504,7 +70,7 @@ TOKEN=$(curl -s -X POST http://localhost:8081/azuread/token \
 curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{}" http://localhost:8080/api/foreldreansvar/barn   # 400: auth passed, ident missing
 ```
 
-Locally there is no Texas or PDL, so `POST /api/foreldreansvar/barn` with a valid ident fails with `502` (nothing answers on the dummy Texas and PDL URLs). Use the tests or the [Salesforce test](#test-end-to-end-from-salesforce-dev) to see real data.
+Locally there is no PDL, so a valid ident gives `502`. Use the tests to see real data.
 
 ```sh
 ./gradlew check
@@ -527,10 +93,6 @@ docker run --rm -p 8080:8080 -e AZURE_APP_CLIENT_ID -e AZURE_OPENID_CONFIG_ISSUE
   -e AZURE_OPENID_CONFIG_JWKS_URI -e AZURE_APP_PRE_AUTHORIZED_APPS nks-foreldreansvar
 ```
 
-Inside a container, `localhost` is the container itself, so it cannot reach a mock-oauth2-server at `localhost:8081`. To run both in Docker, put them on the same Docker network and use the mock's container name in the URLs (e.g. `http://mock-oauth:8080/azuread`). The token's issuer must match too, so request the token with `-H "Host: mock-oauth:8080"`.
+## Deploy
 
-The multi-stage build runs checks and packages the application and resources into an executable JAR. The final image uses distroless Java 21 and runs as a non-root user.
-
-Builds and deployments run only when manually invoked, not on pushes. The workflow builds and publishes the Docker image, then deploys using `.nais/app.yaml`. Nais uses `/internal/isalive` (liveness) and `/internal/isready` (readiness) as health probes.
-
-To build and deploy, open **Actions > Build and deploy > Run workflow** on GitHub, select `main`, and click **Run workflow**. The manual trigger becomes available once the workflow change is merged into `main`. Runs deploy to `dev-gcp`.
+The workflow runs only when started manually: **Actions > Build and deploy > Run workflow** on `main`. It builds the image and deploys `.nais/app.yaml` to dev-gcp.
