@@ -1,0 +1,16 @@
+<configuration>
+    <!-- Tests log plain text; the app logs JSON (see src/main/resources/logback.xml). -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="org.apache.kafka" level="WARN"/>
+    <logger name="io.confluent" level="WARN"/>
+    <logger name="io.netty" level="INFO"/>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

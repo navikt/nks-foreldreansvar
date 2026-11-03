@@ -11,6 +11,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.headersOf
 import io.ktor.http.parseUrlEncodedParameters
+import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -57,9 +59,42 @@ class PdlClientTest {
     private fun client(
         servers: FakeServers,
         timeoutMillis: Long = 10_000,
+        meterRegistry: MeterRegistry = SimpleMeterRegistry(),
     ): PdlClient {
         val httpClient = createHttpClient(servers.engine, timeoutMillis)
-        return PdlClient(httpClient, config, TexasTokenClient(httpClient, config.tokenEndpoint))
+        return PdlClient(httpClient, config, TexasTokenClient(httpClient, config.tokenEndpoint), meterRegistry)
+    }
+
+    @Test
+    fun `times each call by operation and outcome`() {
+        val meterRegistry = SimpleMeterRegistry()
+        val servers =
+            FakeServers(
+                { respondJson(resource("foreldreansvar-ok.json")) },
+                { respondJson(resource("not-found.json")) },
+                { respondJson(resource("unauthorized.json")) },
+            )
+        val client = client(servers, meterRegistry = meterRegistry)
+
+        runBlocking {
+            client.hentForelder(ident)
+            assertThrows<PdlException.NotFound> { client.hentForelder(ident) }
+            assertThrows<PdlException.Unauthorized> { client.hentBarn(ident) }
+        }
+
+        fun count(
+            operation: String,
+            outcome: String,
+        ) = meterRegistry
+            .find("pdl.requests")
+            .tags("operation", operation, "outcome", outcome)
+            .timer()
+            ?.count()
+        assertEquals(1L, count("hentForelder", "ok"))
+        assertEquals(1L, count("hentForelder", "not_found"))
+        assertEquals(1L, count("hentBarn", "unauthorized"))
+        // No idents in tag values.
+        assertTrue(meterRegistry.meters.flatMap { it.id.tags }.none { ident in it.value })
     }
 
     @Test

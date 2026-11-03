@@ -5,6 +5,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.testApplication
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class ApplicationTest {
@@ -47,6 +48,21 @@ class ApplicationTest {
 
             assertEquals(HttpStatusCode.OK, response.status)
             assertEquals("READY", response.bodyAsText())
+        }
+
+    @Test
+    fun `metrics are served without a token in Prometheus format`() =
+        testApplication {
+            application { module(dummyAzureConfig, unusedPdlClient()) }
+            client.get("/internal/isready")
+
+            val response = client.get("/internal/metrics")
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertTrue(response.headers["Content-Type"]!!.startsWith("text/plain"))
+            val body = response.bodyAsText()
+            assertTrue("jvm_memory_used_bytes" in body)
+            assertTrue("ktor_http_server_requests_seconds_count" in body)
         }
 
     @Test

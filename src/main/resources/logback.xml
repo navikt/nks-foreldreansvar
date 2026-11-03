@@ -1,14 +1,29 @@
 <configuration>
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
     <!-- Kafka and the schema registry client log heartbeats and fetches at DEBUG/INFO many times per second. -->
     <logger name="org.apache.kafka" level="WARN"/>
     <logger name="io.confluent" level="WARN"/>
     <logger name="io.netty" level="INFO"/>
+
+    <!-- Readable text for local runs: export LOG_FORMAT=plain. This condition syntax needs no extra library (Janino). -->
+    <condition class="ch.qos.logback.core.boolex.PropertyEqualityCondition">
+        <key>LOG_FORMAT</key>
+        <value>plain</value>
+    </condition>
+    <if>
+        <then>
+            <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder>
+                    <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+                </encoder>
+            </appender>
+        </then>
+        <else>
+            <!-- JSON by default (Nais), so Grafana/Loki gets level, logger, thread and message as separate fields. -->
+            <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
+            </appender>
+        </else>
+    </if>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>

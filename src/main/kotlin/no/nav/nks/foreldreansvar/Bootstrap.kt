@@ -5,6 +5,8 @@ import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.micrometer.prometheusmetrics.PrometheusConfig
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
 import no.nav.nks.foreldreansvar.leesah.ConsumerHealth
 import no.nav.nks.foreldreansvar.leesah.LeesahConfig
 import no.nav.nks.foreldreansvar.leesah.LeesahConsumer
@@ -20,19 +22,35 @@ fun main() {
     val pdlConfig = PdlConfig.fromEnv()
     val leesahConfig = LeesahConfig.fromEnv()
 
+    // One registry for all metrics, served at /internal/metrics.
+    val meterRegistry = PrometheusMeterRegistry(PrometheusConfig.DEFAULT)
+
     // One shared HTTP client for the whole app; it holds connection pools and must be closed on shutdown.
     val httpClient = createHttpClient()
-    val pdlClient = PdlClient(httpClient, pdlConfig, TexasTokenClient(httpClient, pdlConfig.tokenEndpoint))
+    val pdlClient = PdlClient(httpClient, pdlConfig, TexasTokenClient(httpClient, pdlConfig.tokenEndpoint), meterRegistry)
 
     // Null when LEESAH_ENABLED=false. The handler is a logging placeholder until Salesforce notification (5.2) is built.
     val consumerHealth = ConsumerHealth()
-    val leesahConsumer = leesahConfig?.let { LeesahConsumer.create(it, LoggingForeldreansvarHendelseHandler(), consumerHealth) }
+    val leesahConsumer =
+        leesahConfig?.let {
+            LeesahConsumer.create(
+                it,
+                LoggingForeldreansvarHendelseHandler(),
+                consumerHealth,
+                meterRegistry,
+            )
+        }
 
     embeddedServer(Netty, port = 8080) {
         monitor.subscribe(ApplicationStarted) { leesahConsumer?.start() }
         // Stop the consumer while the app is still up, so it can finish its batch and commit.
         monitor.subscribe(ApplicationStopping) { leesahConsumer?.stop() }
         monitor.subscribe(ApplicationStopped) { httpClient.close() }
-        module(azureConfig, pdlClient, isAlive = { leesahConsumer == null || consumerHealth.isAlive() })
+        module(
+            azureConfig,
+            pdlClient,
+            isAlive = { leesahConsumer == null || consumerHealth.isAlive() },
+            meterRegistry = meterRegistry,
+        )
     }.start(wait = true)
 }

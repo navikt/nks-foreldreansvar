@@ -20,6 +20,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.jackson.jackson
+import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.Timer
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.slf4j.LoggerFactory
 import java.io.IOException
 
@@ -42,11 +45,14 @@ fun createHttpClient(
  * Client for the PDL GraphQL API. Throws [PdlException] on every kind of failure.
  *
  * Idents are personal data: never log them or put them in exception messages.
+ *
+ * Each call is timed as `pdl_requests_seconds{operation, outcome}`, e.g. operation=hentBarn, outcome=not_found.
  */
 class PdlClient(
     private val httpClient: HttpClient,
     private val config: PdlConfig,
     private val tokenClient: TexasTokenClient,
+    private val meterRegistry: MeterRegistry = SimpleMeterRegistry(),
 ) {
     private val log = LoggerFactory.getLogger(PdlClient::class.java)
 
@@ -54,17 +60,19 @@ class PdlClient(
     suspend fun hentForelder(
         ident: String,
         historikk: Boolean = false,
-    ): Forelder {
-        val request = GraphQLRequest(FORELDREANSVAR_QUERY, mapOf("ident" to ident, "historikk" to historikk))
-        val response = callPdl(request)
-        return response.data?.hentPerson ?: throw PdlException.NotFound()
-    }
+    ): Forelder =
+        timed("hentForelder") {
+            val request = GraphQLRequest(FORELDREANSVAR_QUERY, mapOf("ident" to ident, "historikk" to historikk))
+            val response = callPdl(request)
+            response.data?.hentPerson ?: throw PdlException.NotFound()
+        }
 
     /** Looks up the child's adressebeskyttelse, foreldreansvar and parents (all current values). */
-    suspend fun hentBarn(ident: String): Barn {
-        val request = GraphQLRequest(BARN_ANSVARLIGE_QUERY, mapOf("ident" to ident))
-        return callPdl(request).data?.hentBarn ?: throw PdlException.NotFound()
-    }
+    suspend fun hentBarn(ident: String): Barn =
+        timed("hentBarn") {
+            val request = GraphQLRequest(BARN_ANSVARLIGE_QUERY, mapOf("ident" to ident))
+            callPdl(request).data?.hentBarn ?: throw PdlException.NotFound()
+        }
 
     /**
      * Looks up several persons in one call. Returns only results with `code == "ok"`; the rest are left out and
@@ -76,7 +84,7 @@ class PdlClient(
     ): List<PersonBolkResultat> {
         if (identer.isEmpty()) return emptyList()
         val request = GraphQLRequest(PERSON_BOLK_QUERY, mapOf("identer" to identer, "historikk" to historikk))
-        val resultater = callPdl(request).data?.hentPersonBolk.orEmpty()
+        val resultater = timed("hentPersonBolk") { callPdl(request).data?.hentPersonBolk.orEmpty() }
         val (ok, ikkeOk) = resultater.partition { it.code == "ok" && it.person != null }
         if (ikkeOk.isNotEmpty()) {
             // Only codes and counts: never log the idents.
@@ -89,6 +97,32 @@ class PdlClient(
         }
         return ok
     }
+
+    private suspend fun <T> timed(
+        operation: String,
+        block: suspend () -> T,
+    ): T {
+        val sample = Timer.start(meterRegistry)
+        var outcome = "ok"
+        try {
+            return block()
+        } catch (e: Exception) {
+            outcome = outcomeOf(e)
+            throw e
+        } finally {
+            sample.stop(meterRegistry.timer("pdl.requests", "operation", operation, "outcome", outcome))
+        }
+    }
+
+    private fun outcomeOf(e: Exception): String =
+        when (e) {
+            is PdlException.NotFound -> "not_found"
+            is PdlException.Unauthorized -> "unauthorized"
+            is PdlException.BadRequest -> "bad_request"
+            is PdlException.TokenUnavailable -> "token_unavailable"
+            is PdlException.Timeout -> "timeout"
+            else -> "error"
+        }
 
     private suspend fun callPdl(request: GraphQLRequest): PdlResponse {
         try {
