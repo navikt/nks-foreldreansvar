@@ -18,9 +18,9 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Reads `pdl.leesah-v1` and passes relevant events to [handler].
+ * Reads `pdl.leesah-v1` and passes the relevant events from each poll to [handler] in one call.
  *
- * - Offsets are committed after each batch has been handled (at-least-once).
+ * - Offsets are committed after the handler has handled the whole poll (at-least-once).
  * - If [handler] throws, we retry [maxAttempts] times with backoff. If it still fails, the consumer stops without
  *   committing and [health] reports not alive, so Nais restarts the pod and the batch is read again.
  * - A record we can't deserialize is logged (partition/offset only) and skipped.
@@ -77,7 +77,8 @@ class LeesahConsumer(
             while (running.get()) {
                 val records = poll()
                 health.polled()
-                records.forEach(::process)
+                val hendelser = records.mapNotNull(::relevant)
+                if (hendelser.isNotEmpty()) handleWithRetry(hendelser)
                 if (!records.isEmpty) consumer.commitSync()
                 logStats()
             }
@@ -107,31 +108,31 @@ class LeesahConsumer(
             ConsumerRecords.empty()
         }
 
-    private fun process(record: ConsumerRecord<String, GenericRecord>) {
+    private fun relevant(record: ConsumerRecord<String, GenericRecord>): Personhendelse? {
         read++
         eventsRead.increment()
         // The key is an aktør-id, so it's never used or logged here.
-        val value = record.value() ?: return
-        if (!filter.matches(value)) return
+        val value = record.value() ?: return null
+        if (!filter.matches(value)) return null
         matched++
         val hendelse = Personhendelse.fra(value)
         meterRegistry.counter("leesah.events.relevant", "endringstype", hendelse.endringstype).increment()
-        handleWithRetry(hendelse)
+        return hendelse
     }
 
-    private fun handleWithRetry(hendelse: Personhendelse) {
+    private fun handleWithRetry(hendelser: List<Personhendelse>) {
         var backoff = initialBackoff
         repeat(maxAttempts) { attempt ->
             try {
-                handler.handle(hendelse)
+                handler.handle(hendelser)
                 return
             } catch (e: Exception) {
                 handlerFailures.increment()
                 log.warn(
-                    "Handling Leesah event failed (attempt {} of {}): hendelseId={}, error={}",
+                    "Handling {} Leesah events failed (attempt {} of {}): error={}",
+                    hendelser.size,
                     attempt + 1,
                     maxAttempts,
-                    hendelse.hendelseId,
                     e::class.qualifiedName,
                 )
                 if (attempt + 1 == maxAttempts) throw e

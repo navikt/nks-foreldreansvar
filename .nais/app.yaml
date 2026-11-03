@@ -56,12 +56,28 @@ spec:
     # All four, so we can see in the logs what PDL sends for each kind of change.
     - name: LEESAH_ENDRINGSTYPER
       value: OPPRETTET,KORRIGERT,OPPHOERT,ANNULLERT
+    # Salesforce push (see the Salesforce section in the README). "false" = dry run: PDL lookups run, but we only log
+    # what we would send. Set to "true" once the connected app, the Apex endpoint and the secret below exist.
+    - name: SALESFORCE_ENABLED
+      value: "false"
+    - name: SALESFORCE_LOGIN_URL
+      value: https://test.salesforce.com
+    # Path of the Apex REST endpoint on the Salesforce instance. Placeholder until the endpoint exists.
+    - name: SALESFORCE_ENDPOINT_PATH
+      value: /services/apexrest/foreldreansvar/v1
+  # SALESFORCE_CLIENT_ID, SALESFORCE_USERNAME and SALESFORCE_PRIVATE_KEY. The secret is created manually in teamnks.
+  # Commented out because Nais will not start the pod if the secret does not exist yet.
+  # envFrom:
+  #   - secret: nks-foreldreansvar-salesforce
   accessPolicy:
     outbound:
       # PDL runs in dev-fss (on-prem), so we call it as an external host.
       # outbound.rules only covers apps in the same GCP environment, so no rule is needed here.
       external:
         - host: pdl-api.dev-fss-pub.nais.io
+        # Salesforce login (JWT bearer token). Add the instance host (from the token's instance_url,
+        # e.g. <org>.sandbox.my.salesforce.com) here before setting SALESFORCE_ENABLED to "true".
+        - host: test.salesforce.com
     inbound:
       rules:
         # Salesforce reaches us via saas-proxy, which calls us with its own token.

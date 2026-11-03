@@ -4,7 +4,7 @@
 
 A Kotlin application using [Ktor](https://ktor.io) with the Netty engine. It uses Java 21, Gradle with Groovy build files, JUnit 5, Kotlinter and Shadow.
 
-The app exposes the health endpoints Nais needs, `POST /api/foreldreansvar/barn`, `POST /api/foreldreansvar/verifiser` and `POST /api/foreldreansvar/ansvarlige` (foreldreansvar and persons from [PDL](#pdl), see [API](#api)). All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). It also reads PDL events from Kafka (see [Leesah](#leesah-pdl-events-on-kafka)), logs JSON and exposes Prometheus metrics (see [Observability](#observability)).
+The app exposes the health endpoints Nais needs, `POST /api/foreldreansvar/barn`, `POST /api/foreldreansvar/verifiser` and `POST /api/foreldreansvar/ansvarlige` (foreldreansvar and persons from [PDL](#pdl), see [API](#api)). All `/api/**` routes require an Entra ID machine-to-machine token (see [Authentication](#authentication)). It also reads PDL's [Leesah](#leesah-pdl-events-on-kafka) events and pushes the current foreldreansvar to [Salesforce](#salesforce-push-from-leesah-events), logs JSON and exposes Prometheus metrics (see [Observability](#observability)).
 
 ### Why Ktor and Jackson?
 
@@ -27,7 +27,8 @@ src/main/kotlin/no/nav/nks/foreldreansvar/
   Adressebeskyttelse.kt  The kode 6/7 rule (erBeskyttet), shared by all endpoints
   ErrorHandling.kt   Maps exceptions to RFC 7807 problem-details responses
   pdl/               PDL client: config, Texas token client, GraphQL client, models and errors
-  leesah/            Kafka consumer for PDL's pdl.leesah-v1: config, filter, handler and health
+  leesah/            Kafka consumer for PDL's pdl.leesah-v1: config, filter, handler, health and AnsvarligeSync (event → PDL → Salesforce)
+  salesforce/        Salesforce client: config, JWT bearer token client and the batch POST to our Apex REST endpoint
 src/main/resources/logback.xml  Logging: JSON by default, plain text with LOG_FORMAT=plain
 src/main/resources/pdl/  The GraphQL queries sent to PDL (foreldreansvar, person-bolk, barn-ansvarlige)
 src/test/kotlin/     Tests using ktor-server-test-host, mock-oauth2-server and Ktor MockEngine
@@ -315,7 +316,7 @@ The queries are in `src/main/resources/pdl/`: `foreldreansvar.graphql` (classes 
 
 ## Leesah (PDL events on Kafka)
 
-The app reads PDL's event topic `pdl.leesah-v1` ("Livet er en strøm av hendelser") to find out when foreldreansvar changes. Events that match the filter go to `ForeldreansvarHendelseHandler`. For now that's a placeholder that logs metadata only (hendelseId, tidligereHendelseId, endringstype, `ansvar`, whether `ansvarlig` is set, the number of personidenter and whether an fnr was found). Notifying Salesforce is the next step and plugs in there.
+The app reads PDL's event topic `pdl.leesah-v1` ("Livet er en strøm av hendelser") to find out when foreldreansvar changes. The events from each poll that match the filter go together to `ForeldreansvarHendelseHandler`. The handler is `AnsvarligeSync`, which looks the children up in PDL and sends the result to Salesforce (see [Salesforce](#salesforce-push-from-leesah-events)).
 
 > **Status:** The consumer is on in dev, and we read all four endringstyper for `FORELDREANSVAR_V1` so we can learn what PDL sends. PDL publishes `FORELDREANSVAR_V1` on Leesah in dev, but the schema change is not on `master` in navikt/pdl yet (navikt/pdl#4473).
 
@@ -324,8 +325,8 @@ The app reads PDL's event topic `pdl.leesah-v1` ("Livet er en strøm av hendelse
 - **Avro without generated classes.** Leesah is Avro with a schema registry. We read it as `GenericRecord` and pick out the few top-level fields we need (`Personhendelse.kt`). That way we need no code generation and no GitHub Packages token, and new fields on PDL's side don't break us.
 - **Foreldreansvar.** For `FORELDREANSVAR_V1` the event is about the child. `personidenter` holds the child's aktør-id (13 digits) and fnr (11 digits), and `Personhendelse.fnr` picks the fnr. The optional `foreldreansvar` field has `ansvar` (e.g. `felles`, `mor`) and `ansvarlig` (the parent's fnr, may be null). We read it defensively, so older records without the field give `null`.
 - **Filter.** `LEESAH_OPPLYSNINGSTYPER` and `LEESAH_ENDRINGSTYPER` decide what is relevant. Everything else is read, then ignored.
-- **Offsets.** Auto-commit is off. We commit after each batch is handled, so delivery is *at-least-once*: after a crash, the last batch is read again. The handler must therefore tolerate duplicates (use `hendelseId`). The consumer group is `nks-foreldreansvar-leesah-v1`. Changing it makes the app start over from `auto.offset.reset=latest`.
-- **Errors.** If the handler throws, we retry 3 times with backoff (1 s, 2 s). If it still fails, the consumer stops without committing and `/internal/isalive` returns 503. Nais then restarts the pod, and we continue from the last committed offset. A record that can't be deserialized is logged (partition and offset only) and skipped. There is no dead-letter topic, because a placeholder handler has nothing to park.
+- **Offsets.** Auto-commit is off. We commit after the handler has handled the whole poll (for us: after Salesforce accepted every batch), so delivery is *at-least-once*: after a crash, the last batch is read again. The handler must therefore tolerate duplicates; ours does, because it always sends the full current state. The consumer group is `nks-foreldreansvar-leesah-v1`. Changing it makes the app start over from `auto.offset.reset=latest`.
+- **Errors.** If the handler throws (PDL or Salesforce down), we retry the whole poll 3 times with backoff (1 s, 2 s). If it still fails, the consumer stops without committing and `/internal/isalive` returns 503. Nais then restarts the pod, and we continue from the last committed offset. A record that can't be deserialized is logged (partition and offset only) and skipped. There is no dead-letter topic: a failing poll is retried until it goes through, and the state we send is always rebuilt from PDL.
 - **Health.** `/internal/isalive` fails if the consumer has stopped because of an error or hasn't polled for 5 minutes. `/internal/isready` only reflects the HTTP API, so a Kafka problem doesn't stop traffic to the API.
 - **Personal data.** The Kafka key (aktør-id), `personidenter` and `ansvarlig` are never logged. `Personhendelse.toString()` and `Foreldreansvar.toString()` mask them.
 
@@ -344,6 +345,83 @@ When the consumer is enabled, the app does not start if any of them is missing.
 ### Tests
 
 The tests use Kafka's `MockConsumer` and Confluent's in-memory schema registry (`mock://`), so they need no Docker. `src/test/resources/leesah/personhendelse-test.avsc` is a test-only subset of PDL's schema.
+
+## Salesforce (push from Leesah events)
+
+When foreldreansvar changes for a child, Salesforce gets the child's full current list of ansvarlige, so it can update who the child is shared with.
+
+> **Status:** Built against configuration. The Apex endpoint and the connected app do not exist yet, so dev runs with `SALESFORCE_ENABLED=false` (dry run).
+
+### Flow
+
+**Event = signal, PDL = truth.** A Leesah event only tells us *which* child changed. We never send what the event says; we look up the current state in PDL and send that. Per poll (up to 100 events):
+
+1. Keep the relevant `FORELDREANSVAR_V1` events and group them by the child's fnr. Several events for the same child give one lookup; we keep the `hendelseId` of the one PDL created last. Events without an fnr are skipped (count logged).
+2. Look each child up with `hentAnsvarlige()`, the same code as `POST /api/foreldreansvar/ansvarlige`, so the [kode 6/7 rule](#adressebeskyttelse-kode-67) is the same. A child PDL does not find is sent with no ansvarlige (fail closed). Other PDL errors fail the poll.
+3. Split into batches of 50 and POST each batch to Salesforce.
+4. Commit the Kafka offsets only after Salesforce accepted every batch. If anything fails, the [Leesah retry](#how-it-works) takes over: 3 attempts, then the pod restarts and reads the poll again. Sending a batch twice does no harm, since each element is the full state.
+
+There is no database: Kafka offsets are our only state.
+
+### Payload contract (for the Salesforce team)
+
+`POST {instance_url}{SALESFORCE_ENDPOINT_PATH}` with `Authorization: Bearer <access token>` and `Content-Type: application/json`:
+
+```json
+{
+  "oppdateringer": [
+    {
+      "barnIdent": "10101012345",
+      "ansvarlige": [
+        { "ident": "01020312345", "ansvar": "felles" },
+        { "ident": "05060712345", "ansvar": "felles" }
+      ],
+      "hendelseId": "c1d2e3f4-...",
+      "hentetTidspunkt": "2026-10-29T10:00:00Z"
+    },
+    { "barnIdent": "20202012345", "ansvarlige": [], "hendelseId": "a9b8c7d6-...", "hentetTidspunkt": "2026-10-29T10:00:00Z" }
+  ]
+}
+```
+
+- At most 50 elements per request, each child at most once per request.
+- Each element is the **full current state** for the child: share with exactly these idents, and stop sharing with anyone else. An empty `ansvarlige` means remove all sharing (kode 6/7 child, no one with foreldreansvar, or child not found in PDL).
+- `ansvar` is passed on from PDL (`felles`, `mor`, `far`, `medmor`, `andre`, ...). `hendelseId` is the Leesah event that triggered the lookup, for tracing. `hentetTidspunkt` is when we looked up PDL (ISO-8601, UTC); use it to ignore an element older than what you already have.
+- The same element may arrive more than once (at-least-once), so handling must be idempotent.
+- Answer `2xx` only when the whole batch is stored. Anything else makes us retry the whole poll. A `401` makes us get a new token and try once more.
+- The wrapper object lets Apex bind it directly: `@HttpPost global static void doPost(List<Oppdatering> oppdateringer)`.
+
+### Auth: OAuth 2.0 JWT bearer flow
+
+We act as an integration user through a connected app. We sign a short-lived JWT (RS256, `iss` = consumer key, `sub` = username, `aud` = login URL, `exp` = now + 3 min) with our private key, and trade it at `{SALESFORCE_LOGIN_URL}/services/oauth2/token` for an access token and the `instance_url`. Salesforce checks the signature with the certificate uploaded to the connected app, so no password or client secret is involved. We keep the token in memory until Salesforce answers `401`.
+
+To set it up: create an RSA key pair and a certificate, upload the certificate to the connected app, pre-authorize the integration user, and put the private key (PKCS#8 PEM, `-----BEGIN PRIVATE KEY-----`) in the secret.
+
+### Configuration
+
+| Variable | Set by | Dev value |
+| --- | --- | --- |
+| `SALESFORCE_ENABLED` | `.nais/app.yaml` | `false`. With `false` (or unset) we do everything except the POST and only log counts (dry run) |
+| `SALESFORCE_LOGIN_URL` | `.nais/app.yaml` | `https://test.salesforce.com` (sandbox) or the org's My Domain URL |
+| `SALESFORCE_ENDPOINT_PATH` | `.nais/app.yaml` | e.g. `/services/apexrest/foreldreansvar/v1` |
+| `SALESFORCE_CLIENT_ID` | secret `nks-foreldreansvar-salesforce` | the connected app's consumer key |
+| `SALESFORCE_USERNAME` | secret `nks-foreldreansvar-salesforce` | the integration user |
+| `SALESFORCE_PRIVATE_KEY` | secret `nks-foreldreansvar-salesforce` | PKCS#8 PEM private key |
+
+With `SALESFORCE_ENABLED=true` the app does not start if any of them is missing, so a missing secret never turns sending off silently.
+
+### Turning it on
+
+1. Create the secret in `teamnks` (e.g. in [Nais Console](https://console.nav.cloud.nais.io)) named `nks-foreldreansvar-salesforce` with the three keys above.
+2. In `.nais/app.yaml`: uncomment the `envFrom` block (Nais refuses to start the pod if the secret it points to does not exist), set `SALESFORCE_ENDPOINT_PATH` to the real path, add the instance host (e.g. `<org>.sandbox.my.salesforce.com`) under `accessPolicy.outbound.external`, and set `SALESFORCE_ENABLED` to `"true"`.
+
+### Personal data
+
+Idents are never logged and never put in exception messages; logs only have counts, HTTP status and `hendelseId`. See [Metrics](#metrics) for `salesforce_requests_seconds` and `foreldreansvar_sync_children_total`. Salesforce's response body is not logged either, since it may echo idents.
+
+### Tests
+
+The tests use Ktor `MockEngine` as a fake Salesforce (`FakeSalesforce`) and a fake PDL, and generate an RSA key per run. They cover deduplication, batches of 50, the JWT bearer token request (signature and claims), the 401 retry, no commit when Salesforce keeps failing, and kode 6/7.
 
 ## Observability
 
@@ -368,6 +446,8 @@ Idents (fnr, aktør-id) are never logged, only counts, codes and decisions. If w
 | `leesah_events_relevant_total{endringstype}` | Events that matched the filter and went to the handler |
 | `leesah_handler_failures_total` | Failed handler attempts (each retry counts) |
 | `leesah_records_skipped_total` | Records we could not deserialize and skipped |
+| `salesforce_requests_seconds_*{operation, outcome}` | Calls to Salesforce. `operation`: `token` (JWT bearer token) or `send` (a batch to the Apex endpoint). `outcome`: `ok`, `unauthorized`, `client_error`, `server_error`, `timeout`, `error` |
+| `foreldreansvar_sync_children_total{result, dry_run}` | Children whose state Salesforce accepted (counted after the whole poll is sent). `result`: `with_ansvarlige`, `without_ansvarlige` (none, or kode 6/7), `not_found` (not in PDL, sent with none). `dry_run="true"` while `SALESFORCE_ENABLED=false` |
 | `kafka_consumer_fetch_manager_records_lag_max` and other `kafka_consumer_*` | The Kafka client's own metrics, e.g. consumer lag |
 
 Metric names and tags never contain idents.
@@ -379,6 +459,8 @@ Example queries:
 sum by (outcome) (rate(pdl_requests_seconds_count{app="nks-foreldreansvar"}[5m])) * 60
 # How far behind the Leesah consumer is
 max(kafka_consumer_fetch_manager_records_lag_max{app="nks-foreldreansvar"})
+# Salesforce batches per minute by outcome
+sum by (outcome) (rate(salesforce_requests_seconds_count{app="nks-foreldreansvar", operation="send"}[5m])) * 60
 ```
 
 Not set up yet: alerts, dashboards and tracing (OpenTelemetry via Nais auto-instrumentation).
@@ -404,7 +486,7 @@ export AZURE_APP_PRE_AUTHORIZED_APPS='[{"name":"local:platforce:saas-proxy","cli
 # PDL is not called at startup, so dummy values are enough to run the app locally.
 export PDL_URL=http://localhost:9999/graphql PDL_TARGET=local:pdl:pdl-api PDL_BEHANDLINGSNUMMER=B118
 export NAIS_TOKEN_ENDPOINT=http://localhost:9999/token
-# There is no Kafka locally.
+# There is no Kafka locally. Salesforce is off unless SALESFORCE_ENABLED=true.
 export LEESAH_ENABLED=false
 # Readable logs instead of JSON.
 export LOG_FORMAT=plain
