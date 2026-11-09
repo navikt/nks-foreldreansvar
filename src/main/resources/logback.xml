@@ -15,12 +15,28 @@
                 <encoder>
                     <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
                 </encoder>
+                <!-- Lines marked TEAM_LOGS may contain idents: never on stdout, in any environment. -->
+                <filter class="ch.qos.logback.core.filter.EvaluatorFilter">
+                    <evaluator class="ch.qos.logback.classic.boolex.OnMarkerEvaluator">
+                        <marker>TEAM_LOGS</marker>
+                    </evaluator>
+                    <OnMatch>DENY</OnMatch>
+                    <OnMismatch>NEUTRAL</OnMismatch>
+                </filter>
             </appender>
         </then>
         <else>
             <!-- JSON by default (Nais), so Grafana/Loki gets level, logger, thread and message as separate fields. -->
             <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
                 <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
+                <!-- Lines marked TEAM_LOGS may contain idents: never on stdout, in any environment. -->
+                <filter class="ch.qos.logback.core.filter.EvaluatorFilter">
+                    <evaluator class="ch.qos.logback.classic.boolex.OnMarkerEvaluator">
+                        <marker>TEAM_LOGS</marker>
+                    </evaluator>
+                    <OnMatch>DENY</OnMatch>
+                    <OnMismatch>NEUTRAL</OnMismatch>
+                </filter>
             </appender>
         </else>
     </if>
@@ -28,4 +44,34 @@
     <root level="INFO">
         <appender-ref ref="STDOUT"/>
     </root>
+
+    <!-- Nais Team Logs (https://doc.nais.io/observability/logging/how-to/team-logs/): only lines marked TEAM_LOGS.
+         Only on Nais, where NAIS_POD_NAME is set and team-logs.nais-system exists. Locally they are dropped. -->
+    <condition class="ch.qos.logback.core.boolex.IsPropertyDefinedCondition">
+        <key>NAIS_POD_NAME</key>
+    </condition>
+    <if>
+        <then>
+            <appender name="TEAM_LOGS" class="net.logstash.logback.appender.LogstashTcpSocketAppender">
+                <destination>team-logs.nais-system:5170</destination>
+                <keepAliveDuration>30 seconds</keepAliveDuration>
+                <writeTimeout>1 minute</writeTimeout>
+                <reconnectionDelay>1 second</reconnectionDelay>
+                <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                    <customFields>{"google_cloud_project":"${GOOGLE_CLOUD_PROJECT}","nais_namespace_name":"${NAIS_NAMESPACE}","nais_pod_name":"${NAIS_POD_NAME}","nais_container_name":"${NAIS_APP_NAME}"}</customFields>
+                    <includeContext>false</includeContext>
+                </encoder>
+                <filter class="ch.qos.logback.core.filter.EvaluatorFilter">
+                    <evaluator class="ch.qos.logback.classic.boolex.OnMarkerEvaluator">
+                        <marker>TEAM_LOGS</marker>
+                    </evaluator>
+                    <OnMatch>ACCEPT</OnMatch>
+                    <OnMismatch>DENY</OnMismatch>
+                </filter>
+            </appender>
+            <root>
+                <appender-ref ref="TEAM_LOGS"/>
+            </root>
+        </then>
+    </if>
 </configuration>

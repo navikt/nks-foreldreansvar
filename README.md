@@ -15,6 +15,8 @@ Kotlin, [Ktor](https://ktor.io), Java 21, Gradle. Runs on [Nais](https://doc.nai
 - **PDL events:** reads `pdl.leesah-v1` and sends the current foreldreansvar for changed children to Salesforce.
 - Persons with adressebeskyttelse (kode 6/7) are always excluded.
 
+Idents are never written to the normal log (stdout), in any environment. Log lines with idents use the `TEAM_LOGS` marker (`TeamLogs.kt`) and only go to [Nais Team Logs](https://doc.nais.io/observability/logging/how-to/team-logs/); locally they are dropped.
+
 Errors use [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) problem details. Health and metrics: `/internal/isalive`, `/internal/isready`, `/internal/metrics`.
 
 Design and operations are documented internally in teamnks' Confluence.

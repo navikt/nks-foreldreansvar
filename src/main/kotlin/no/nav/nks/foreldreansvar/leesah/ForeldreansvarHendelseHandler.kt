@@ -7,7 +7,7 @@ package no.nav.nks.foreldreansvar.leesah
  * - Throw to signal a temporary failure. The consumer retries the whole list, and if it keeps failing it stops without
  *   committing, so the events are read again after the pod restarts.
  * - Delivery is at-least-once, so the same event can arrive more than once. Handle it idempotently.
- * - Never put idents in exception messages or logs.
+ * - Never put idents in exception messages or logs, except log lines marked [no.nav.nks.foreldreansvar.TEAM_LOGS].
  */
 fun interface ForeldreansvarHendelseHandler {
     fun handle(hendelser: List<Personhendelse>)

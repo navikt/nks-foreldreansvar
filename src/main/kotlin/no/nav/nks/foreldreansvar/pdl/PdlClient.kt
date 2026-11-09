@@ -23,6 +23,8 @@ import io.ktor.serialization.jackson.jackson
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
+import no.nav.nks.foreldreansvar.TEAM_LOGS
+import no.nav.nks.foreldreansvar.erBeskyttet
 import org.slf4j.LoggerFactory
 import java.io.IOException
 
@@ -44,7 +46,8 @@ fun createHttpClient(
 /**
  * Client for the PDL GraphQL API. Throws [PdlException] on every kind of failure.
  *
- * Idents are personal data: never log them or put them in exception messages.
+ * Idents are personal data: never log them or put them in exception messages. The only exception is log lines
+ * marked [TEAM_LOGS], which go to Team Logs and never to stdout.
  *
  * Each call is timed as `pdl_requests_seconds{operation, outcome}`, e.g. operation=hentBarn, outcome=not_found.
  */
@@ -64,14 +67,42 @@ class PdlClient(
         timed("hentForelder") {
             val request = GraphQLRequest(FORELDREANSVAR_QUERY, mapOf("ident" to ident, "historikk" to historikk))
             val response = callPdl(request)
-            response.data?.hentPerson ?: throw PdlException.NotFound()
+            val forelder = response.data?.hentPerson
+            if (forelder == null) {
+                log.info(TEAM_LOGS, "PDL hentForelder ident={}: not found", ident)
+                throw PdlException.NotFound()
+            }
+            log.info(
+                TEAM_LOGS,
+                "PDL hentForelder ident={} historikk={}: found, beskyttet={}, ansvarssubjekter={}",
+                ident,
+                historikk,
+                forelder.adressebeskyttelse.erBeskyttet(),
+                forelder.foreldreansvar.map { it.ansvarssubjekt },
+            )
+            forelder
         }
 
     /** Looks up the child's adressebeskyttelse, foreldreansvar and parents (all current values). */
     suspend fun hentBarn(ident: String): Barn =
         timed("hentBarn") {
             val request = GraphQLRequest(BARN_ANSVARLIGE_QUERY, mapOf("ident" to ident))
-            callPdl(request).data?.hentBarn ?: throw PdlException.NotFound()
+            val barn = callPdl(request).data?.hentBarn
+            if (barn == null) {
+                log.info(TEAM_LOGS, "PDL hentBarn ident={}: not found", ident)
+                throw PdlException.NotFound()
+            }
+            log.info(
+                TEAM_LOGS,
+                "PDL hentBarn ident={}: found, beskyttet={}, foreldreansvar={}, foreldre={}",
+                ident,
+                barn.adressebeskyttelse.erBeskyttet(),
+                barn.foreldreansvar.map { "${it.ansvar}:${it.ansvarlig}" },
+                barn.forelderBarnRelasjon
+                    .filter { it.relatertPersonsRolle != "BARN" }
+                    .map { "${it.relatertPersonsRolle}:${it.relatertPersonsIdent}" },
+            )
+            barn
         }
 
     /**
@@ -86,6 +117,12 @@ class PdlClient(
         val request = GraphQLRequest(PERSON_BOLK_QUERY, mapOf("identer" to identer, "historikk" to historikk))
         val resultater = timed("hentPersonBolk") { callPdl(request).data?.hentPersonBolk.orEmpty() }
         val (ok, ikkeOk) = resultater.partition { it.code == "ok" && it.person != null }
+        log.info(
+            TEAM_LOGS,
+            "PDL hentPersonBolk identer={}: {}",
+            identer,
+            resultater.map { it.teamLogsSummary() },
+        )
         if (ikkeOk.isNotEmpty()) {
             // Only codes and counts: never log the idents.
             log.info(
@@ -96,6 +133,11 @@ class PdlClient(
             )
         }
         return ok
+    }
+
+    private fun PersonBolkResultat.teamLogsSummary(): String {
+        val person = person ?: return "$ident:$code"
+        return "$ident:$code:beskyttet=${erBeskyttet()}:doed=${person.doedsfall.isNotEmpty()}"
     }
 
     private suspend fun <T> timed(
