@@ -3,6 +3,7 @@ package no.nav.nks.foreldreansvar.leesah
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import kotlinx.coroutines.runBlocking
+import no.nav.nks.foreldreansvar.TEAM_LOGS
 import no.nav.nks.foreldreansvar.hentAnsvarlige
 import no.nav.nks.foreldreansvar.pdl.PdlClient
 import no.nav.nks.foreldreansvar.pdl.PdlException
@@ -42,6 +43,15 @@ class AnsvarligeSync(
 
             val resultater =
                 sisteHendelsePerBarn.map { (barnIdent, hendelse) ->
+                    log.info(
+                        TEAM_LOGS,
+                        "Leesah: handling barnIdent={} from hendelseId={} ({} {}), {} events for the child in this poll",
+                        barnIdent,
+                        hendelse.hendelseId,
+                        hendelse.opplysningstype,
+                        hendelse.endringstype,
+                        hendelser.count { it.fnr == barnIdent },
+                    )
                     try {
                         val ansvarlige = hentAnsvarlige(pdlClient, barnIdent, clock)
                         val resultat = if (ansvarlige.ansvarlige.isEmpty()) "without_ansvarlige" else "with_ansvarlige"
@@ -57,7 +67,19 @@ class AnsvarligeSync(
             if (ikkeFunnet > 0) log.info("{} children not found in PDL, sending them with no ansvarlige", ikkeFunnet)
 
             val batcher = oppdateringer.chunked(OppdateringSender.MAX_BATCH_SIZE)
-            batcher.forEach { sender.send(it) }
+            batcher.forEach { batch ->
+                sender.send(batch)
+                batch.forEach {
+                    log.info(
+                        TEAM_LOGS,
+                        "Salesforce {}: barnIdent={} ansvarlige={} hendelseId={}",
+                        if (sender.dryRun) "dry run, not sent" else "sent",
+                        it.barnIdent,
+                        it.ansvarlige.map { a -> "${a.ident}:${a.ansvar}" },
+                        it.hendelseId,
+                    )
+                }
+            }
             resultater.groupingBy { it.first }.eachCount().forEach { (resultat, antall) ->
                 meterRegistry
                     .counter("foreldreansvar.sync.children", "result", resultat, "dry_run", sender.dryRun.toString())

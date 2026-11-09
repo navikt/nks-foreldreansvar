@@ -27,6 +27,7 @@ fun Route.apiRoutes(
         if (forelder.adressebeskyttelse.erBeskyttet()) {
             // Same response as "no children", so the answer does not reveal that the parent is protected.
             log.info("barn: parent has adressebeskyttelse, returning no children")
+            log.info(TEAM_LOGS, "barn: forelderIdent={}: parent has adressebeskyttelse, returning no children", forelderIdent)
             call.respond(BarnResponse(emptyList()))
             return@post
         }
@@ -36,7 +37,9 @@ fun Route.apiRoutes(
         if (beskyttede > 0) log.info("barn: left out {} children with adressebeskyttelse", beskyttede)
         val doede = personer.count { it.erDoed() && !it.erBeskyttet() }
         if (doede > 0) log.info("barn: left out {} dead children", doede)
-        call.respond(barnResponse(identer, personer, LocalDate.now(clock)))
+        val response = barnResponse(identer, personer, LocalDate.now(clock))
+        log.info(TEAM_LOGS, "barn: forelderIdent={}: returning barn={} of {}", forelderIdent, response.barn.map { it.ident }, identer)
+        call.respond(response)
     }
 
     // Answers whether the parent can represent the child: the child must be in the parent's current foreldreansvar,
@@ -49,6 +52,7 @@ fun Route.apiRoutes(
                 pdlClient.hentPersonBolk(listOf(barnIdent), historikk = false).singleOrNull { it.ident == barnIdent }
             }
         if (resultat != Verifisering.OK) log.info("verifiser: kanRepresentere=false, reason {}", resultat)
+        log.info(TEAM_LOGS, "verifiser: forelderIdent={} barnIdent={}: {}", request.forelderIdent, request.barnIdent, resultat)
         call.respond(VerifiserResponse(kanRepresentere = resultat == Verifisering.OK))
     }
 
@@ -56,6 +60,13 @@ fun Route.apiRoutes(
     // Kode 6/7: a protected child gets an empty list, and protected parents are left out. See hentAnsvarlige().
     post("/foreldreansvar/ansvarlige") {
         val barnIdent = call.receive<AnsvarligeRequest>().validBarnIdent()
-        call.respond(hentAnsvarlige(pdlClient, barnIdent, clock))
+        val response = hentAnsvarlige(pdlClient, barnIdent, clock)
+        log.info(
+            TEAM_LOGS,
+            "ansvarlige: barnIdent={}: returning ansvarlige={}",
+            barnIdent,
+            response.ansvarlige.map { "${it.ident}:${it.ansvar}" },
+        )
+        call.respond(response)
     }
 }

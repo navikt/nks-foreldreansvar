@@ -71,6 +71,10 @@ spec:
   #   - secret: nks-foreldreansvar-salesforce
   accessPolicy:
     outbound:
+      # Team Logs: log lines with idents (TEAM_LOGS marker, see logback.xml) go here instead of stdout.
+      rules:
+        - application: logging
+          namespace: nais-system
       # PDL runs in dev-fss (on-prem), so we call it as an external host.
       # outbound.rules only covers apps in the same GCP environment, so no rule is needed here.
       external:
