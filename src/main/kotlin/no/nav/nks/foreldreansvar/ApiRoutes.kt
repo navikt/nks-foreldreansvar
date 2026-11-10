@@ -7,7 +7,6 @@ import io.ktor.server.routing.post
 import no.nav.nks.foreldreansvar.pdl.PdlClient
 import org.slf4j.LoggerFactory
 import java.time.Clock
-import java.time.LocalDate
 
 private val log = LoggerFactory.getLogger("no.nav.nks.foreldreansvar.ApiRoutes")
 
@@ -20,7 +19,8 @@ fun Route.apiRoutes(
     clock: Clock,
 ) {
     // Returns the children the parent has foreldreansvar for right now (historikk = false), with name, birth data and age.
-    // Kode 6/7: a protected parent gets an empty list, and protected children are left out. Dead children are left out.
+    // Kode 6/7: a protected parent gets an empty list, and protected children are left out. Dead and myndige children
+    // (18 or older, or unknown age) are left out.
     post("/foreldreansvar/barn") {
         val forelderIdent = call.receive<BarnRequest>().validIdent()
         val forelder = pdlClient.hentForelder(forelderIdent, historikk = false)
@@ -37,18 +37,22 @@ fun Route.apiRoutes(
         if (beskyttede > 0) log.info("barn: left out {} children with adressebeskyttelse", beskyttede)
         val doede = personer.count { it.erDoed() && !it.erBeskyttet() }
         if (doede > 0) log.info("barn: left out {} dead children", doede)
-        val response = barnResponse(identer, personer, LocalDate.now(clock))
+        val today = idag(clock)
+        val myndige = personer.count { it.regnesSomMyndig(today) && !it.erDoed() && !it.erBeskyttet() }
+        if (myndige > 0) log.info("barn: left out {} children who are myndig or have unknown age", myndige)
+        val response = barnResponse(identer, personer, today)
         log.info(TEAM_LOGS, "barn: forelderIdent={}: returning barn={} of {}", forelderIdent, response.barn.map { it.ident }, identer)
         call.respond(response)
     }
 
     // Answers whether the parent can represent the child: the child must be in the parent's current foreldreansvar,
-    // neither of them can have kode 6/7, and the child must be alive. Salesforce relies on this as its backend check.
+    // neither of them can have kode 6/7, and the child must be alive and under 18. Salesforce relies on this as its
+    // backend check.
     post("/foreldreansvar/verifiser") {
         val request = call.receive<VerifiserRequest>().validated()
         val forelder = pdlClient.hentForelder(request.forelderIdent, historikk = false)
         val resultat =
-            verifiser(forelder, request.barnIdent) { barnIdent ->
+            verifiser(forelder, request.barnIdent, idag(clock)) { barnIdent ->
                 pdlClient.hentPersonBolk(listOf(barnIdent), historikk = false).singleOrNull { it.ident == barnIdent }
             }
         if (resultat != Verifisering.OK) log.info("verifiser: kanRepresentere=false, reason {}", resultat)
@@ -57,7 +61,8 @@ fun Route.apiRoutes(
     }
 
     // Returns everyone with foreldreansvar for the child right now. Salesforce uses it for the initial load and on demand.
-    // Kode 6/7: a protected child gets an empty list, and protected parents are left out. See hentAnsvarlige().
+    // Kode 6/7 or myndig: a protected or myndig child gets an empty list, and protected parents are left out.
+    // See hentAnsvarlige().
     post("/foreldreansvar/ansvarlige") {
         val barnIdent = call.receive<AnsvarligeRequest>().validBarnIdent()
         val response = hentAnsvarlige(pdlClient, barnIdent, clock)

@@ -131,10 +131,12 @@ class AnsvarligeRouteTest {
     private fun barnJson(
         foreldreansvar: String,
         gradering: String? = null,
+        foedselsdato: String = """[{"foedselsdato":"2015-03-01","foedselsaar":2015}]""",
     ): String {
         val adressebeskyttelse = gradering?.let { """[{"gradering":"$it"}]""" } ?: "[]"
         return """{"data":{"hentBarn":{
             "adressebeskyttelse":$adressebeskyttelse,
+            "foedselsdato":$foedselsdato,
             "foreldreansvar":$foreldreansvar,
             "forelderBarnRelasjon":[
               {"relatertPersonsIdent":"$mor","relatertPersonsRolle":"MOR"},
@@ -185,6 +187,37 @@ class AnsvarligeRouteTest {
             assertEquals(0, mapper.readTree(response.body)["ansvarlige"].size(), gradering)
             assertEquals(1, pdl.pdlBodies.size)
         }
+    }
+
+    @Test
+    fun `myndig child or child with unknown age gets an empty list without looking up the parents`() {
+        // The clock is 2026-10-29: born 2008-10-29 turns 18 today, foedselsaar 2008 is ambiguous.
+        for (foedselsdato in listOf(
+            """[{"foedselsdato":"2008-10-29"}]""",
+            """[{"foedselsdato":null,"foedselsaar":2008}]""",
+            """[{"foedselsdato":null,"foedselsaar":2007}]""",
+            "[]",
+        )) {
+            val pdl = FakePdl { respondJson(barnJson(felles, foedselsdato = foedselsdato)) }
+
+            val response = post(pdl, """{"barnIdent":"$barnIdent"}""")
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(0, mapper.readTree(response.body)["ansvarlige"].size(), foedselsdato)
+            assertEquals(1, pdl.pdlBodies.size)
+        }
+    }
+
+    @Test
+    fun `child the day before turning 18 keeps its ansvarlige`() {
+        val pdl =
+            FakePdl(bolk = { respondJson(bolk(mor to "UGRADERT", far to "UGRADERT")) }) {
+                respondJson(barnJson(felles, foedselsdato = """[{"foedselsdato":"2008-10-30"}]"""))
+            }
+
+        val response = post(pdl, """{"barnIdent":"$barnIdent"}""")
+
+        assertEquals(listOf(mor, far), mapper.readTree(response.body)["ansvarlige"].map { it["ident"].asText() })
     }
 
     @Test

@@ -22,6 +22,9 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class VerifiserRouteTest {
@@ -38,6 +41,10 @@ class VerifiserRouteTest {
     private val annetBarnIdent = "20202012345"
 
     private val path = "/api/foreldreansvar/verifiser"
+
+    // 2026-10-29 in Oslo.
+    private val clock = Clock.fixed(Instant.parse("2026-10-29T10:00:00Z"), ZoneId.of("Europe/Oslo"))
+    private val under18 = "2015-03-01"
 
     @BeforeAll
     fun start() = mockOAuth2Server.start()
@@ -64,7 +71,9 @@ class VerifiserRouteTest {
     fun `child without any adressebeskyttelse entry can be represented`() {
         val pdl =
             FakePdl(bolk = {
-                respondJson("""{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"ok","person":{"adressebeskyttelse":[]}}]}}""")
+                respondJson(
+                    """{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"ok","person":{"adressebeskyttelse":[],"foedselsdato":[{"foedselsdato":"$under18"}]}}]}}""",
+                )
             }) { respondJson(forelderMedAdressebeskyttelse("foreldreansvar-ok.json", "UGRADERT")) }
 
         assertKanRepresentere(true, post(pdl, body(forelderIdent, barnIdent)))
@@ -94,7 +103,7 @@ class VerifiserRouteTest {
         val pdl =
             FakePdl(bolk = {
                 respondJson(
-                    """{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"ok","person":{"doedsfall":[{"doedsdato":"2024-01-01"}]}}]}}""",
+                    """{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"ok","person":{"doedsfall":[{"doedsdato":"2024-01-01"}],"foedselsdato":[{"foedselsdato":"$under18"}]}}]}}""",
                 )
             }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
 
@@ -109,6 +118,52 @@ class VerifiserRouteTest {
             }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
 
         assertKanRepresentere(false, post(pdl, body(forelderIdent, barnIdent)))
+    }
+
+    @Test
+    fun `child who is 18 or older cannot be represented`() {
+        for (foedselsdato in listOf("2008-10-29", "2000-01-01")) {
+            val pdl =
+                FakePdl(bolk = { respondJson(barnBolk("UGRADERT", """[{"foedselsdato":"$foedselsdato"}]""")) }) {
+                    respondJson(pdlResource("foreldreansvar-ok.json"))
+                }
+
+            assertKanRepresentere(false, post(pdl, body(forelderIdent, barnIdent)))
+        }
+    }
+
+    @Test
+    fun `child the day before turning 18 can be represented`() {
+        val pdl =
+            FakePdl(bolk = { respondJson(barnBolk("UGRADERT", """[{"foedselsdato":"2008-10-30"}]""")) }) {
+                respondJson(pdlResource("foreldreansvar-ok.json"))
+            }
+
+        assertKanRepresentere(true, post(pdl, body(forelderIdent, barnIdent)))
+    }
+
+    @Test
+    fun `child with unknown or ambiguous age cannot be represented`() {
+        for (foedselsdato in listOf(
+            "[]",
+            """[{"foedselsdato":null,"foedselsaar":2008}]""",
+            """[{"foedselsdato":null,"foedselsaar":null}]""",
+        )) {
+            val pdl =
+                FakePdl(bolk = { respondJson(barnBolk("UGRADERT", foedselsdato)) }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
+
+            assertKanRepresentere(false, post(pdl, body(forelderIdent, barnIdent)))
+        }
+    }
+
+    @Test
+    fun `child with only a foedselsaar that is certainly under 18 can be represented`() {
+        val pdl =
+            FakePdl(bolk = { respondJson(barnBolk("UGRADERT", """[{"foedselsdato":null,"foedselsaar":2009}]""")) }) {
+                respondJson(pdlResource("foreldreansvar-ok.json"))
+            }
+
+        assertKanRepresentere(true, post(pdl, body(forelderIdent, barnIdent)))
     }
 
     @Test
@@ -210,8 +265,11 @@ class VerifiserRouteTest {
             assertEquals(HttpStatusCode.Unauthorized, response.status)
         }
 
-    private fun barnBolk(gradering: String) =
-        """{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"ok","person":{"adressebeskyttelse":[{"gradering":"$gradering"}]}}]}}"""
+    private fun barnBolk(
+        gradering: String,
+        foedselsdato: String = """[{"foedselsdato":"$under18","foedselsaar":2015}]""",
+    ) = """{"data":{"hentPersonBolk":[{"ident":"$barnIdent","code":"ok",
+           "person":{"adressebeskyttelse":[{"gradering":"$gradering"}],"foedselsdato":$foedselsdato}}]}}"""
 
     private fun assertKanRepresentere(
         expected: Boolean,
@@ -264,7 +322,7 @@ class VerifiserRouteTest {
     ): Response {
         lateinit var result: Response
         testApplication {
-            application { module(testAzureConfig(), pdl.client) }
+            application { module(testAzureConfig(), pdl.client, clock) }
 
             val response: HttpResponse =
                 client.post(path) {

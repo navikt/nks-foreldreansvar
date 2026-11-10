@@ -23,7 +23,7 @@ import java.time.temporal.ChronoUnit
  * committing. That is safe because each element is the full state, so sending it again changes nothing.
  *
  * Counts each child as `foreldreansvar_sync_children_total{result, dry_run}` once its batches are accepted.
- * `result`: `with_ansvarlige`, `without_ansvarlige` (none, or kode 6/7) or `not_found` (not in PDL, sent as none).
+ * `result`: `with_ansvarlige`, `without_ansvarlige` (none, kode 6/7, or myndig) or `not_found` (not in PDL, sent as none).
  */
 class AnsvarligeSync(
     private val pdlClient: PdlClient,

@@ -14,6 +14,7 @@ Kotlin, [Ktor](https://ktor.io), Java 21, Gradle. Runs on [Nais](https://doc.nai
   - `POST /api/foreldreansvar/ansvarlige`: everyone with foreldreansvar for a child.
 - **PDL events:** reads `pdl.leesah-v1` and sends the current foreldreansvar for changed children to Salesforce.
 - Persons with adressebeskyttelse (kode 6/7) are always excluded.
+- Children who are 18 or older, or whose age is unknown, count as not covered by foreldreansvar (`Myndighet.kt`). Turning 18 is not a PDL event, so Salesforce must remove sharing for those children itself.
 
 Idents are never written to the normal log (stdout), in any environment. Log lines with idents use the `TEAM_LOGS` marker (`TeamLogs.kt`) and only go to [Nais Team Logs](https://doc.nais.io/observability/logging/how-to/team-logs/); locally they are dropped.
 

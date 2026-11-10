@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import no.nav.nks.foreldreansvar.pdl.Adressebeskyttelse
 import no.nav.nks.foreldreansvar.pdl.BolkPerson
 import no.nav.nks.foreldreansvar.pdl.Doedsfall
+import no.nav.nks.foreldreansvar.pdl.Foedselsdato
 import no.nav.nks.foreldreansvar.pdl.Forelder
 import no.nav.nks.foreldreansvar.pdl.Foreldreansvar
 import no.nav.nks.foreldreansvar.pdl.PersonBolkResultat
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.time.LocalDate
 
 class AdressebeskyttelseTest {
     private fun graderinger(vararg values: String?) = values.map { Adressebeskyttelse(it) }
@@ -51,7 +53,7 @@ class AdressebeskyttelseTest {
         var lookups = 0
         val resultat =
             runBlocking {
-                verifiser(forelder("FORTROLIG"), BARN) {
+                verifiser(forelder("FORTROLIG"), BARN, TODAY) {
                     lookups++
                     bolk("UGRADERT")
                 }
@@ -63,12 +65,16 @@ class AdressebeskyttelseTest {
     @Test
     fun `verifiser gives the reason for each outcome`() {
         runBlocking {
-            assertEquals(Verifisering.OK, verifiser(forelder(), BARN) { bolk("UGRADERT") })
-            assertEquals(Verifisering.IKKE_FORELDREANSVAR, verifiser(forelder(), "20202012345") { error("not called") })
-            assertEquals(Verifisering.BARN_IKKE_FUNNET, verifiser(forelder(), BARN) { null })
-            assertEquals(Verifisering.BARN_BESKYTTET, verifiser(forelder(), BARN) { bolk("STRENGT_FORTROLIG_UTLAND") })
-            val doed = PersonBolkResultat(BARN, "ok", BolkPerson(doedsfall = listOf(Doedsfall(null))))
-            assertEquals(Verifisering.BARN_DOED, verifiser(forelder(), BARN) { doed })
+            assertEquals(Verifisering.OK, verifiser(forelder(), BARN, TODAY) { bolk("UGRADERT") })
+            assertEquals(Verifisering.IKKE_FORELDREANSVAR, verifiser(forelder(), "20202012345", TODAY) { error("not called") })
+            assertEquals(Verifisering.BARN_IKKE_FUNNET, verifiser(forelder(), BARN, TODAY) { null })
+            assertEquals(Verifisering.BARN_BESKYTTET, verifiser(forelder(), BARN, TODAY) { bolk("STRENGT_FORTROLIG_UTLAND") })
+            val doed = PersonBolkResultat(BARN, "ok", BolkPerson(doedsfall = listOf(Doedsfall(null)), foedselsdato = UNDER_18))
+            assertEquals(Verifisering.BARN_DOED, verifiser(forelder(), BARN, TODAY) { doed })
+            val myndig = PersonBolkResultat(BARN, "ok", BolkPerson(foedselsdato = listOf(Foedselsdato("2008-10-29", 2008))))
+            assertEquals(Verifisering.BARN_MYNDIG, verifiser(forelder(), BARN, TODAY) { myndig })
+            val ukjentAlder = PersonBolkResultat(BARN, "ok", BolkPerson())
+            assertEquals(Verifisering.BARN_MYNDIG, verifiser(forelder(), BARN, TODAY) { ukjentAlder })
         }
     }
 
@@ -78,9 +84,12 @@ class AdressebeskyttelseTest {
             foreldreansvar = listOf(Foreldreansvar("felles", "01020312345", BARN, null)),
         )
 
-    private fun bolk(gradering: String) = PersonBolkResultat(BARN, "ok", BolkPerson(adressebeskyttelse = graderinger(gradering)))
+    private fun bolk(gradering: String) =
+        PersonBolkResultat(BARN, "ok", BolkPerson(adressebeskyttelse = graderinger(gradering), foedselsdato = UNDER_18))
 
     private companion object {
         const val BARN = "10101012345"
+        val TODAY: LocalDate = LocalDate.parse("2026-10-29")
+        val UNDER_18 = listOf(Foedselsdato("2008-10-30", 2008))
     }
 }

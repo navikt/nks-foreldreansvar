@@ -67,8 +67,10 @@ fun Barn.ansvarligeKandidater(barnIdent: String): List<AnsvarligDto> =
 /**
  * The full current list of people with foreldreansvar for [barnIdent] that Salesforce may share the child with.
  * Kode 6/7, fail closed: a protected child gives an empty list (and the parents are not looked up), and protected
- * parents, or parents PDL does not return, are left out. Throws [no.nav.nks.foreldreansvar.pdl.PdlException.NotFound]
- * if the child does not exist in PDL.
+ * parents, or parents PDL does not return, are left out. A child who is 18 or older, or whose age is unknown (see
+ * [regnesSomMyndig]), also gives an empty list. Turning 18 sends no PDL event, so Salesforce must remove sharing for
+ * those children itself, e.g. with a scheduled job or by calling `/ansvarlige`.
+ * Throws [no.nav.nks.foreldreansvar.pdl.PdlException.NotFound] if the child does not exist in PDL.
  */
 suspend fun hentAnsvarlige(
     pdlClient: PdlClient,
@@ -79,6 +81,10 @@ suspend fun hentAnsvarlige(
     val barn = pdlClient.hentBarn(barnIdent)
     if (barn.adressebeskyttelse.erBeskyttet()) {
         log.info("ansvarlige: child has adressebeskyttelse, returning no ansvarlige")
+        return AnsvarligeResponse(barnIdent, emptyList(), hentetTidspunkt)
+    }
+    if (barn.foedselsdato.regnesSomMyndig(idag(clock))) {
+        log.info("ansvarlige: child is myndig or has unknown age, returning no ansvarlige")
         return AnsvarligeResponse(barnIdent, emptyList(), hentetTidspunkt)
     }
     val kandidater = barn.ansvarligeKandidater(barnIdent)

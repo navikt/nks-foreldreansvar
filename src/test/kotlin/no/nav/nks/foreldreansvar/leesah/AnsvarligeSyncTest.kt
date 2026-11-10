@@ -60,10 +60,12 @@ class AnsvarligeSyncTest {
     private fun barnJson(
         gradering: String? = null,
         foreldreansvar: String = """[{"ansvar":"felles","ansvarlig":null,"ansvarssubjekt":"$barn"}]""",
+        foedselsdato: String = "2015-03-01",
     ): String {
         val adressebeskyttelse = gradering?.let { """[{"gradering":"$it"}]""" } ?: "[]"
         return """{"data":{"hentBarn":{
             "adressebeskyttelse":$adressebeskyttelse,
+            "foedselsdato":[{"foedselsdato":"$foedselsdato"}],
             "foreldreansvar":$foreldreansvar,
             "forelderBarnRelasjon":[
               {"relatertPersonsIdent":"$mor","relatertPersonsRolle":"MOR"},
@@ -148,6 +150,28 @@ class AnsvarligeSyncTest {
             assertEquals(emptyList<AnsvarligDto>(), sent.single().single().ansvarlige, gradering)
             assertTrue(pdl.pdlBodies.none { it.contains("hentPersonBolkQuery") })
         }
+    }
+
+    @Test
+    fun `a myndig child is sent with no ansvarlige, without looking up the parents`() {
+        val pdl = FakePdl { respondJson(barnJson(foedselsdato = "2008-10-29")) }
+
+        AnsvarligeSync(pdl.client, sender, meterRegistry, clock).handle(listOf(hendelse()))
+
+        assertEquals(listOf(listOf(ForeldreansvarOppdatering(barn, emptyList(), "hendelse-1", tidspunkt))), sent)
+        assertTrue(pdl.pdlBodies.none { it.contains("hentPersonBolkQuery") })
+        assertEquals(1.0, synced("without_ansvarlige"))
+    }
+
+    @Test
+    fun `the 18th birthday follows the date in Oslo, not UTC`() {
+        // 2026-10-28T23:30Z is already 2026-10-29 in Oslo, the 18th birthday.
+        val utcClock = Clock.fixed(Instant.parse("2026-10-28T23:30:00Z"), ZoneOffset.UTC)
+        val pdl = FakePdl { respondJson(barnJson(foedselsdato = "2008-10-29")) }
+
+        AnsvarligeSync(pdl.client, sender, meterRegistry, utcClock).handle(listOf(hendelse()))
+
+        assertEquals(emptyList<AnsvarligDto>(), sent.single().single().ansvarlige)
     }
 
     @Test
