@@ -151,9 +151,9 @@ class BarnRouteTest {
             FakePdl(bolk = {
                 respondJson(
                     """{"data":{"hentPersonBolk":[
-                       {"ident":"10101012345","code":"ok","person":{"adressebeskyttelse":[{"gradering":"STRENGT_FORTROLIG"}]}},
-                       {"ident":"20202012345","code":"ok","person":{"adressebeskyttelse":[{"gradering":"UGRADERT"}]}},
-                       {"ident":"30303012345","code":"ok","person":{"adressebeskyttelse":[{"gradering":"FORTROLIG"}]}}
+                       {"ident":"10101012345","code":"ok","person":{"adressebeskyttelse":[{"gradering":"STRENGT_FORTROLIG"}],$UNDER_18}},
+                       {"ident":"20202012345","code":"ok","person":{"adressebeskyttelse":[{"gradering":"UGRADERT"}],$UNDER_18}},
+                       {"ident":"30303012345","code":"ok","person":{"adressebeskyttelse":[{"gradering":"FORTROLIG"}],$UNDER_18}}
                     ]}}""",
                 )
             }) { respondJson(pdlResource("foreldreansvar-forelder.json")) }
@@ -170,9 +170,9 @@ class BarnRouteTest {
             FakePdl(bolk = {
                 respondJson(
                     """{"data":{"hentPersonBolk":[
-                       {"ident":"10101012345","code":"ok","person":{"doedsfall":[{"doedsdato":"2024-01-01"}]}},
-                       {"ident":"20202012345","code":"ok","person":{"doedsfall":[]}},
-                       {"ident":"30303012345","code":"ok","person":{"doedsfall":[{"doedsdato":null}]}}
+                       {"ident":"10101012345","code":"ok","person":{"doedsfall":[{"doedsdato":"2024-01-01"}],$UNDER_18}},
+                       {"ident":"20202012345","code":"ok","person":{"doedsfall":[],$UNDER_18}},
+                       {"ident":"30303012345","code":"ok","person":{"doedsfall":[{"doedsdato":null}],$UNDER_18}}
                     ]}}""",
                 )
             }) { respondJson(pdlResource("foreldreansvar-forelder.json")) }
@@ -181,6 +181,38 @@ class BarnRouteTest {
 
         assertEquals(HttpStatusCode.OK, response.status)
         assertEquals(listOf("20202012345"), mapper.readTree(response.body)["barn"].map { it["ident"].asText() })
+    }
+
+    @Test
+    fun `myndige children and children with unknown or ambiguous age are left out`() {
+        // Today is 2025-03-01 in Oslo.
+        val pdl =
+            FakePdl(bolk = {
+                respondJson(
+                    """{"data":{"hentPersonBolk":[
+                       {"ident":"10101012345","code":"ok","person":{"foedselsdato":[{"foedselsdato":"2007-03-01"}]}},
+                       {"ident":"20202012345","code":"ok","person":{"foedselsdato":[{"foedselsdato":"2007-03-02"}]}},
+                       {"ident":"30303012345","code":"ok","person":{"foedselsdato":[{"foedselsdato":null,"foedselsaar":2007}]}}
+                    ]}}""",
+                )
+            }) { respondJson(pdlResource("foreldreansvar-forelder.json")) }
+
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(listOf("20202012345"), mapper.readTree(response.body)["barn"].map { it["ident"].asText() })
+    }
+
+    @Test
+    fun `children without birth data are left out`() {
+        val pdl =
+            FakePdl(bolk = {
+                respondJson("""{"data":{"hentPersonBolk":[{"ident":"10101012345","code":"ok","person":{"foedselsdato":[]}}]}}""")
+            }) { respondJson(pdlResource("foreldreansvar-ok.json")) }
+
+        val response = postBarn(pdl, """{"ident":"$ident"}""")
+
+        assertEquals(mapper.readTree("""{"barn":[]}"""), mapper.readTree(response.body))
     }
 
     @Test
@@ -362,3 +394,5 @@ class BarnRouteTest {
             preAuthorizedClientIds = setOf(saasProxyClientId),
         )
 }
+
+private const val UNDER_18 = """"foedselsdato":[{"foedselsdato":"2015-03-01","foedselsaar":2015}]"""

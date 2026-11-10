@@ -4,6 +4,10 @@ query barnAnsvarligeQuery($ident: ID!) {
         adressebeskyttelse(historikk: false) {
             gradering
         }
+        foedselsdato {
+            foedselsdato
+            foedselsaar
+        }
         foreldreansvar(historikk: false) {
             ansvar
             ansvarlig

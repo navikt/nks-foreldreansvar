@@ -3,6 +3,7 @@ package no.nav.nks.foreldreansvar
 import no.nav.nks.foreldreansvar.pdl.Forelder
 import no.nav.nks.foreldreansvar.pdl.Foreldreansvar
 import no.nav.nks.foreldreansvar.pdl.PersonBolkResultat
+import java.time.LocalDate
 
 // Request and response bodies for POST /api/foreldreansvar/verifiser (API contract with Salesforce).
 
@@ -38,15 +39,18 @@ enum class Verifisering {
     BARN_IKKE_FUNNET,
     BARN_BESKYTTET,
     BARN_DOED,
+    BARN_MYNDIG,
 }
 
 /**
  * Checks, in order: the parent has no kode 6/7, the child is in the parent's foreldreansvar, and the child is found in
- * PDL alive and without kode 6/7. [hentBarn] is only called when the parent checks pass, so we don't look up the child needlessly.
+ * PDL alive, without kode 6/7 and under 18 on [today] (see [regnesSomMyndig]). [hentBarn] is only called when the
+ * parent checks pass, so we don't look up the child needlessly.
  */
 suspend fun verifiser(
     forelder: Forelder,
     barnIdent: String,
+    today: LocalDate,
     hentBarn: suspend (String) -> PersonBolkResultat?,
 ): Verifisering {
     if (forelder.adressebeskyttelse.erBeskyttet()) return Verifisering.FORELDER_BESKYTTET
@@ -55,6 +59,7 @@ suspend fun verifiser(
     return when {
         barn.erBeskyttet() -> Verifisering.BARN_BESKYTTET
         barn.erDoed() -> Verifisering.BARN_DOED
+        barn.regnesSomMyndig(today) -> Verifisering.BARN_MYNDIG
         else -> Verifisering.OK
     }
 }

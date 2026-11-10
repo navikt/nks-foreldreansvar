@@ -3,8 +3,6 @@ package no.nav.nks.foreldreansvar
 import no.nav.nks.foreldreansvar.pdl.Foreldreansvar
 import no.nav.nks.foreldreansvar.pdl.PersonBolkResultat
 import java.time.LocalDate
-import java.time.Period
-import java.time.format.DateTimeParseException
 
 // Request and response bodies for POST /api/foreldreansvar/barn. These are our API contract with Salesforce and are
 // kept separate from the PDL classes, so changing a PDL query does not silently change what Salesforce receives.
@@ -55,7 +53,8 @@ fun List<Foreldreansvar>.barnIdenter(forelderIdent: String): List<String> =
 
 /**
  * Builds the response in the order of [identer]. Children PDL did not return (e.g. `not_found`), children with
- * adressebeskyttelse (kode 6/7) and dead children are left out. [today] is used to calculate `alder`.
+ * adressebeskyttelse (kode 6/7), dead children and myndige children (see [regnesSomMyndig]) are left out. [today] is
+ * used for the age rule and to calculate `alder`.
  */
 fun barnResponse(
     identer: List<String>,
@@ -63,25 +62,18 @@ fun barnResponse(
     today: LocalDate,
 ): BarnResponse {
     val byIdent = personer.associateBy { it.ident }
-    return BarnResponse(identer.mapNotNull { ident -> byIdent[ident]?.takeUnless { it.erBeskyttet() || it.erDoed() }?.toDto(today) })
+    return BarnResponse(
+        identer.mapNotNull { ident ->
+            byIdent[ident]?.takeUnless { it.erBeskyttet() || it.erDoed() || it.regnesSomMyndig(today) }?.toDto(today)
+        },
+    )
 }
 
 /** True if PDL has a death registered for the person, with or without a date. */
 fun PersonBolkResultat.erDoed(): Boolean = person?.doedsfall?.isNotEmpty() ?: false
 
-/** Whole years from [foedselsdato] (`yyyy-MM-dd`) to [today], or `null` if missing or unparseable. */
-fun alder(
-    foedselsdato: String?,
-    today: LocalDate,
-): Int? {
-    val dato =
-        try {
-            foedselsdato?.let(LocalDate::parse)
-        } catch (_: DateTimeParseException) {
-            null
-        } ?: return null
-    return Period.between(dato, today).years.takeIf { it >= 0 }
-}
+/** See [regnesSomMyndig]. A result without a person has no birth data and counts as myndig. */
+fun PersonBolkResultat.regnesSomMyndig(today: LocalDate): Boolean = person?.foedselsdato.orEmpty().regnesSomMyndig(today)
 
 private fun PersonBolkResultat.toDto(today: LocalDate): BarnDto {
     val navn = person?.navn?.firstOrNull()
