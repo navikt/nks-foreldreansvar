@@ -15,9 +15,10 @@ import no.nav.nks.foreldreansvar.pdl.PdlClient
 import no.nav.nks.foreldreansvar.pdl.PdlConfig
 import no.nav.nks.foreldreansvar.pdl.TexasTokenClient
 import no.nav.nks.foreldreansvar.pdl.createHttpClient
-import no.nav.nks.foreldreansvar.salesforce.DryRunSender
+import no.nav.nks.foreldreansvar.salesforce.DisabledThreadCloser
 import no.nav.nks.foreldreansvar.salesforce.SalesforceClient
 import no.nav.nks.foreldreansvar.salesforce.SalesforceConfig
+import no.nav.nks.foreldreansvar.salesforce.SalesforceThreadCloser
 import no.nav.nks.foreldreansvar.salesforce.SalesforceTokenClient
 
 fun main() {
@@ -34,11 +35,13 @@ fun main() {
     val httpClient = createHttpClient()
     val pdlClient = PdlClient(httpClient, pdlConfig, TexasTokenClient(httpClient, pdlConfig.tokenEndpoint), meterRegistry)
 
-    // SALESFORCE_ENABLED=false gives a dry run: we still look up PDL for each event, but only log what we would send.
-    val sender =
+    // SALESFORCE_ENABLED=false: we still look up PDL for each event, but never call Salesforce.
+    // SALESFORCE_LUKK_ENABLED=false: we find the open threads in Salesforce, but only log what we would close.
+    val threadCloser =
         salesforceConfig?.let {
-            SalesforceClient(httpClient, it, SalesforceTokenClient(httpClient, it, meterRegistry), meterRegistry)
-        } ?: DryRunSender()
+            val client = SalesforceClient(httpClient, it, SalesforceTokenClient(httpClient, it, meterRegistry), meterRegistry)
+            SalesforceThreadCloser(client, it.lukkEnabled, meterRegistry)
+        } ?: DisabledThreadCloser()
 
     // Null when LEESAH_ENABLED=false.
     val consumerHealth = ConsumerHealth()
@@ -46,7 +49,7 @@ fun main() {
         leesahConfig?.let {
             LeesahConsumer.create(
                 it,
-                AnsvarligeSync(pdlClient, sender, meterRegistry),
+                AnsvarligeSync(pdlClient, threadCloser, meterRegistry),
                 consumerHealth,
                 meterRegistry,
             )

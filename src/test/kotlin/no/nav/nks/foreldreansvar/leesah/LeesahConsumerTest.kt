@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import no.nav.nks.foreldreansvar.FakePdl
 import no.nav.nks.foreldreansvar.respondJson
 import no.nav.nks.foreldreansvar.salesforce.FakeSalesforce
+import no.nav.nks.foreldreansvar.salesforce.SalesforceThreadCloser
 import org.apache.avro.generic.GenericRecord
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.consumer.MockConsumer
@@ -173,26 +174,33 @@ class LeesahConsumerTest {
     fun `does not commit and reports not alive when Salesforce keeps failing`() {
         val pdl =
             FakePdl { respondJson("""{"data":{"hentBarn":{"adressebeskyttelse":[],"foreldreansvar":[],"forelderBarnRelasjon":[]}}}""") }
-        val salesforce = FakeSalesforce { respond("", HttpStatusCode.ServiceUnavailable) }
+        val salesforce = FakeSalesforce { _, _ -> respond("", HttpStatusCode.ServiceUnavailable) }
 
-        runWith(leesahConsumer(AnsvarligeSync(pdl.client, salesforce.client)), record(0, personhendelse()))
+        runWith(
+            leesahConsumer(AnsvarligeSync(pdl.client, SalesforceThreadCloser(salesforce.client, lukkEnabled = true))),
+            record(0, personhendelse()),
+        )
 
-        assertEquals(3, salesforce.apexRequests.size)
-        assertEquals(3, salesforce.requests("send", "server_error"))
+        assertEquals(3, salesforce.apiRequests.size)
+        assertEquals(3, salesforce.requests("query", "server_error"))
         assertEquals(listOf(Duration.ofSeconds(1), Duration.ofSeconds(2)), sleeps)
         assertNull(committedOffset())
         assertFalse(health.isAlive())
     }
 
     @Test
-    fun `commits once Salesforce has accepted the poll`() {
+    fun `commits once Salesforce has handled the poll`() {
         val pdl =
             FakePdl { respondJson("""{"data":{"hentBarn":{"adressebeskyttelse":[],"foreldreansvar":[],"forelderBarnRelasjon":[]}}}""") }
         val salesforce = FakeSalesforce()
 
-        runWith(leesahConsumer(AnsvarligeSync(pdl.client, salesforce.client)), record(0, personhendelse()), record(1, personhendelse()))
+        runWith(
+            leesahConsumer(AnsvarligeSync(pdl.client, SalesforceThreadCloser(salesforce.client, lukkEnabled = true))),
+            record(0, personhendelse()),
+            record(1, personhendelse()),
+        )
 
-        assertEquals(1, salesforce.apexRequests.size)
+        assertEquals(1, salesforce.apiRequests.size)
         assertEquals(2L, committedOffset())
         assertTrue(health.isAlive())
     }

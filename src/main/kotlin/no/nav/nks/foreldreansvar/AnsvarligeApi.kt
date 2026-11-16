@@ -8,7 +8,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 // Request and response bodies for POST /api/foreldreansvar/ansvarlige (API contract with Salesforce), and the shared
-// lookup hentAnsvarlige() that the Kafka pipeline will reuse. Event = signal, PDL = truth: we always return the full
+// lookup hentAnsvarlige() that the Leesah sync also uses. Event = signal, PDL = truth: we always return the full
 // current state for the child, and an empty list means "remove all sharing".
 
 private val log = LoggerFactory.getLogger("no.nav.nks.foreldreansvar.Ansvarlige")
@@ -68,8 +68,8 @@ fun Barn.ansvarligeKandidater(barnIdent: String): List<AnsvarligDto> =
  * The full current list of people with foreldreansvar for [barnIdent] that Salesforce may share the child with.
  * Kode 6/7, fail closed: a protected child gives an empty list (and the parents are not looked up), and protected
  * parents, or parents PDL does not return, are left out. A child who is 18 or older, or whose age is unknown (see
- * [regnesSomMyndig]), also gives an empty list. Turning 18 sends no PDL event, so Salesforce must remove sharing for
- * those children itself, e.g. with a scheduled job or by calling `/ansvarlige`.
+ * [regnesSomMyndig]), also gives an empty list. Turning 18 sends no PDL event, so the Leesah sync does not close the
+ * parents' threads for those children; that needs a separate scheduled sweep.
  * Throws [no.nav.nks.foreldreansvar.pdl.PdlException.NotFound] if the child does not exist in PDL.
  */
 suspend fun hentAnsvarlige(

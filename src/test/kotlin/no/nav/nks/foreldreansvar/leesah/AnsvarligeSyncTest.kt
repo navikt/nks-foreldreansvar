@@ -10,9 +10,9 @@ import no.nav.nks.foreldreansvar.FakePdl
 import no.nav.nks.foreldreansvar.pdl.PdlException
 import no.nav.nks.foreldreansvar.pdlResource
 import no.nav.nks.foreldreansvar.respondJson
-import no.nav.nks.foreldreansvar.salesforce.DryRunSender
+import no.nav.nks.foreldreansvar.salesforce.DisabledThreadCloser
 import no.nav.nks.foreldreansvar.salesforce.ForeldreansvarOppdatering
-import no.nav.nks.foreldreansvar.salesforce.OppdateringSender
+import no.nav.nks.foreldreansvar.salesforce.ThreadCloser
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -32,7 +32,7 @@ class AnsvarligeSyncTest {
     private val far = "05060712345"
 
     private val sent = mutableListOf<List<ForeldreansvarOppdatering>>()
-    private val sender = OppdateringSender { sent += it }
+    private val sender = ThreadCloser { sent += it }
     private val meterRegistry = SimpleMeterRegistry()
 
     private fun synced(
@@ -83,7 +83,7 @@ class AnsvarligeSyncTest {
         pdlBodies.filter { it.contains("barnAnsvarligeQuery") }.map { mapper.readTree(it)["variables"]["ident"].asText() }
 
     @Test
-    fun `looks up each child in PDL and sends the full state`() {
+    fun `looks up each child in PDL and passes on the full state`() {
         val pdl = FakePdl(bolk = { respondJson(bolk(mor to "UGRADERT", far to "UGRADERT")) }) { respondJson(barnJson()) }
 
         AnsvarligeSync(pdl.client, sender, meterRegistry, clock).handle(listOf(hendelse()))
@@ -130,7 +130,7 @@ class AnsvarligeSyncTest {
     }
 
     @Test
-    fun `a child not found in PDL is sent with no ansvarlige`() {
+    fun `a child not found in PDL is handled as having no ansvarlige`() {
         val pdl = FakePdl { respondJson(pdlResource("not-found.json")) }
 
         AnsvarligeSync(pdl.client, sender, meterRegistry, clock).handle(listOf(hendelse()))
@@ -140,7 +140,7 @@ class AnsvarligeSyncTest {
     }
 
     @Test
-    fun `a child with kode 6 or 7 is sent with no ansvarlige, without looking up the parents`() {
+    fun `a child with kode 6 or 7 gets no ansvarlige, without looking up the parents`() {
         BESKYTTET.forEach { gradering ->
             sent.clear()
             val pdl = FakePdl { respondJson(barnJson(gradering)) }
@@ -153,7 +153,7 @@ class AnsvarligeSyncTest {
     }
 
     @Test
-    fun `a myndig child is sent with no ansvarlige, without looking up the parents`() {
+    fun `a myndig child gets no ansvarlige, without looking up the parents`() {
         val pdl = FakePdl { respondJson(barnJson(foedselsdato = "2008-10-29")) }
 
         AnsvarligeSync(pdl.client, sender, meterRegistry, clock).handle(listOf(hendelse()))
@@ -184,7 +184,7 @@ class AnsvarligeSyncTest {
     }
 
     @Test
-    fun `other PDL errors fail the whole poll and nothing is sent`() {
+    fun `other PDL errors fail the whole poll and Salesforce is not called`() {
         val pdl = FakePdl { respond("", HttpStatusCode.InternalServerError) }
 
         assertThrows<PdlException> { AnsvarligeSync(pdl.client, sender, meterRegistry, clock).handle(listOf(hendelse())) }
@@ -193,10 +193,10 @@ class AnsvarligeSyncTest {
     }
 
     @Test
-    fun `dry run is tagged so its numbers are not mistaken for real deliveries`() {
+    fun `dry run is tagged so its numbers are not mistaken for real ones`() {
         val pdl = FakePdl { respondJson(barnJson(foreldreansvar = "[]")) }
 
-        AnsvarligeSync(pdl.client, DryRunSender(), meterRegistry, clock).handle(listOf(hendelse()))
+        AnsvarligeSync(pdl.client, DisabledThreadCloser(), meterRegistry, clock).handle(listOf(hendelse()))
 
         assertEquals(1.0, synced("without_ansvarlige", dryRun = true))
         assertEquals(0.0, synced("without_ansvarlige", dryRun = false))

@@ -3,9 +3,10 @@ package no.nav.nks.foreldreansvar.salesforce
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.runBlocking
-import no.nav.nks.foreldreansvar.AnsvarligDto
+import no.nav.nks.foreldreansvar.respondJson
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Test
@@ -14,70 +15,158 @@ import org.junit.jupiter.api.assertThrows
 class SalesforceClientTest {
     private val mapper = jacksonObjectMapper()
 
-    private val oppdatering =
-        ForeldreansvarOppdatering(
-            barnIdent = "10101012345",
-            ansvarlige = listOf(AnsvarligDto("01020312345", "felles")),
-            hendelseId = "hendelse-1",
-            hentetTidspunkt = "2026-10-29T10:00:00Z",
-        )
+    // Synthetic test idents, not real people.
+    private val barn1 = "10101012345"
+    private val barn2 = "20202012345"
+    private val mor = "01020312345"
 
     @Test
-    fun `posts the batch to the Apex endpoint on the instance with the access token`() =
+    fun `finds open threads with a SOQL query on the instance`() =
+        runBlocking {
+            val salesforce =
+                FakeSalesforce { _, _ ->
+                    respondJson(queryPage(Triple("a01", barn1, mor), Triple("a02", barn2, null)))
+                }
+
+            val threads = salesforce.client.findOpenThreads(listOf(barn1, barn2))
+
+            assertEquals(listOf(OpenThread("a01", barn1, mor), OpenThread("a02", barn2, null)), threads)
+            val request = salesforce.apiRequests.single()
+            assertEquals("$TEST_INSTANCE_URL/services/data/v62.0/query", request.url.toString().substringBefore('?'))
+            assertEquals("Bearer token-1", request.headers[HttpHeaders.Authorization])
+            assertEquals(
+                "SELECT Id, CRM_Account__r.INT_PersonIdent__c, CRM_Contact__r.Account.INT_PersonIdent__c FROM Thread__c " +
+                    "WHERE CRM_isActive__c = true AND CRM_Thread_Type__c = 'BRUKERVARSEL' " +
+                    "AND CRM_Account__r.INT_PersonIdent__c IN ('$barn1','$barn2')",
+                salesforce.queries.single(),
+            )
+            assertEquals(1, salesforce.requests("query", "ok"))
+        }
+
+    @Test
+    fun `follows nextRecordsUrl until the last page`() =
+        runBlocking {
+            val salesforce =
+                FakeSalesforce { request, _ ->
+                    when (request.url.encodedPath) {
+                        "/services/data/v62.0/query" -> {
+                            respondJson(queryPage(Triple("a01", barn1, mor), nextRecordsUrl = "/services/data/v62.0/query/01g-2000"))
+                        }
+
+                        "/services/data/v62.0/query/01g-2000" -> {
+                            respondJson(queryPage(Triple("a02", barn1, mor), nextRecordsUrl = "/services/data/v62.0/query/01g-4000"))
+                        }
+
+                        else -> {
+                            respondJson(queryPage(Triple("a03", barn1, mor)))
+                        }
+                    }
+                }
+
+            val threads = salesforce.client.findOpenThreads(listOf(barn1))
+
+            assertEquals(listOf("a01", "a02", "a03"), threads.map { it.id })
+            assertEquals(
+                listOf(
+                    "$TEST_INSTANCE_URL/services/data/v62.0/query/01g-2000",
+                    "$TEST_INSTANCE_URL/services/data/v62.0/query/01g-4000",
+                ),
+                salesforce.apiRequests.drop(1).map { it.url.toString() },
+            )
+        }
+
+    @Test
+    fun `only 11-digit idents go into the query, and none means no query`() =
         runBlocking {
             val salesforce = FakeSalesforce()
 
-            salesforce.client.send(listOf(oppdatering, oppdatering.copy(barnIdent = "20202012345", ansvarlige = emptyList())))
+            salesforce.client.findOpenThreads(listOf(barn1, "1' OR Name != '", "123"))
+            assertEquals(listOf(barn1), Regex("'(\\d{11})'").findAll(salesforce.queries.single()).map { it.groupValues[1] }.toList())
 
-            val request = salesforce.apexRequests.single()
-            assertEquals("$TEST_INSTANCE_URL/services/apexrest/foreldreansvar/v1", request.url.toString())
-            assertEquals("Bearer token-1", request.headers[HttpHeaders.Authorization])
-            val expected =
-                """{"oppdateringer":[
-                  {"barnIdent":"10101012345","ansvarlige":[{"ident":"01020312345","ansvar":"felles"}],
-                   "hendelseId":"hendelse-1","hentetTidspunkt":"2026-10-29T10:00:00Z"},
-                  {"barnIdent":"20202012345","ansvarlige":[],
-                   "hendelseId":"hendelse-1","hentetTidspunkt":"2026-10-29T10:00:00Z"}]}"""
-            assertEquals(mapper.readTree(expected), mapper.readTree(salesforce.apexBodies.single()))
-            assertEquals(1, salesforce.requests("token", "ok"))
-            assertEquals(1, salesforce.requests("send", "ok"))
+            salesforce.client.findOpenThreads(listOf("abc"))
+            assertEquals(1, salesforce.apiRequests.size)
+        }
+
+    @Test
+    fun `escapes the thread type in the query`() {
+        val soql = SalesforceClient.openThreadsSoql("a'b\\c", listOf(barn1))
+        assertEquals(true, soql.contains("CRM_Thread_Type__c = 'a\\'b\\\\c'"))
+        assertThrows<IllegalArgumentException> { SalesforceClient.openThreadsSoql("X", listOf("1' OR '1'='1")) }
+    }
+
+    @Test
+    fun `closes threads with sObject Collections in chunks of 200`() =
+        runBlocking {
+            val salesforce = FakeSalesforce()
+            val ids = (1..250).map { "a%03d".format(it) }
+
+            salesforce.client.closeThreads(ids)
+
+            val patches = salesforce.closeRequests
+            assertEquals(2, patches.size)
+            patches.forEach {
+                assertEquals("$TEST_INSTANCE_URL/services/data/v62.0/composite/sobjects", it.url.toString())
+                assertEquals("Bearer token-1", it.headers[HttpHeaders.Authorization])
+            }
+            val bodies = salesforce.apiBodies.map { mapper.readTree(it) }
+            assertEquals(listOf(200, 50), bodies.map { it["records"].size() })
+            val expectedFirst =
+                """{"attributes":{"type":"Thread__c"},"id":"a001","CRM_isActive__c":false,"CRM_Closed_By__c":"nks-foreldreansvar"}"""
+            assertEquals(mapper.readTree(expectedFirst), bodies[0]["records"][0])
+            assertEquals(true, bodies[0]["allOrNone"].asBoolean())
+            assertEquals(2, salesforce.requests("close", "ok"))
         }
 
     @Test
     fun `gets a new token once when Salesforce answers 401`() =
         runBlocking {
             val salesforce =
-                FakeSalesforce { request ->
+                FakeSalesforce { request, _ ->
                     if (request.headers[HttpHeaders.Authorization] == "Bearer token-1") {
                         respond("", HttpStatusCode.Unauthorized)
                     } else {
-                        respond("", HttpStatusCode.OK)
+                        respondJson(queryPage(Triple("a01", barn1, mor)))
                     }
                 }
 
-            salesforce.client.send(listOf(oppdatering))
+            val threads = salesforce.client.findOpenThreads(listOf(barn1))
 
+            assertEquals(1, threads.size)
             assertEquals(2, salesforce.tokenRequests.size)
-            assertEquals(2, salesforce.apexRequests.size)
-            assertEquals(1, salesforce.requests("send", "unauthorized"))
-            assertEquals(1, salesforce.requests("send", "ok"))
+            assertEquals(2, salesforce.apiRequests.size)
+            assertEquals(1, salesforce.requests("query", "unauthorized"))
+            assertEquals(1, salesforce.requests("query", "ok"))
         }
 
     @Test
-    fun `throws on an error status without putting idents in the message`() {
-        val salesforce = FakeSalesforce { respond("""{"error":"10101012345"}""", HttpStatusCode.InternalServerError) }
+    fun `throws when a thread was not closed, without messages or idents`() {
+        val salesforce =
+            FakeSalesforce { _, _ ->
+                respondJson(
+                    """[
+                      {"id":"a01","success":false,"errors":[{"statusCode":"ALL_OR_NONE_OPERATION_ROLLED_BACK","message":"rolled back"}]},
+                      {"id":null,"success":false,"errors":[{"statusCode":"FIELD_CUSTOM_VALIDATION_EXCEPTION","message":"$barn1"}]}
+                    ]""",
+                )
+            }
 
-        val e = assertThrows<SalesforceException> { runBlocking { salesforce.client.send(listOf(oppdatering)) } }
+        val e = assertThrows<SalesforceException> { runBlocking { salesforce.client.closeThreads(listOf("a01", "a02")) } }
 
-        assertEquals("Salesforce returned HTTP 500 for a batch of 1", e.message)
-        assertFalse(e.message!!.contains("10101012345"))
-        assertEquals(1, salesforce.requests("send", "server_error"))
+        assertEquals(
+            "Salesforce did not close 2 of 2 threads (got 2 results): [ALL_OR_NONE_OPERATION_ROLLED_BACK, FIELD_CUSTOM_VALIDATION_EXCEPTION]",
+            e.message,
+        )
+        assertFalse(e.message!!.contains(barn1))
     }
 
     @Test
-    fun `refuses batches larger than 50`() {
-        val salesforce = FakeSalesforce()
-        assertThrows<IllegalArgumentException> { runBlocking { salesforce.client.send(List(51) { oppdatering }) } }
-        assertEquals(0, salesforce.apexRequests.size)
+    fun `throws on an error status without putting idents in the message`() {
+        val salesforce = FakeSalesforce { _, _ -> respond("""{"error":"$barn1"}""", HttpStatusCode.InternalServerError) }
+
+        val e = assertThrows<SalesforceException> { runBlocking { salesforce.client.findOpenThreads(listOf(barn1)) } }
+
+        assertEquals("Salesforce query returned HTTP 500", e.message)
+        assertEquals(1, salesforce.requests("query", "server_error"))
+        assertEquals(HttpMethod.Get, salesforce.apiRequests.single().method)
     }
 }
