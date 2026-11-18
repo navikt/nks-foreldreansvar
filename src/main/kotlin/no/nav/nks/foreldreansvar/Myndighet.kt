@@ -38,8 +38,8 @@ fun alder(
  *   >= 19 is myndig. Exactly 18 could go either way, so it counts as myndig.
  * - No usable birth data counts as myndig.
  *
- * Turning 18 is not a PDL event, so the Leesah sync never removes sharing for a child who just turned 18. Salesforce
- * must handle that itself, e.g. with a scheduled job or by calling `/ansvarlige` for children who turn 18.
+ * Turning 18 is not a PDL event, so the Leesah sync never closes the parents' threads on a child who just turned 18.
+ * That needs a separate scheduled sweep.
  */
 fun List<Foedselsdato>.regnesSomMyndig(today: LocalDate): Boolean {
     firstNotNullOfOrNull { alder(it.foedselsdato, today) }?.let { return it >= MYNDIGHETSALDER }

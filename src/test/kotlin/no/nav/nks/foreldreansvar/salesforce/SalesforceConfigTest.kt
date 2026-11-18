@@ -12,7 +12,8 @@ class SalesforceConfigTest {
         mapOf(
             "SALESFORCE_ENABLED" to "true",
             "SALESFORCE_LOGIN_URL" to "https://test.salesforce.com/",
-            "SALESFORCE_ENDPOINT_PATH" to "/services/apexrest/foreldreansvar/v1",
+            "SALESFORCE_API_VERSION" to "v62.0",
+            "SALESFORCE_THREAD_TYPE" to "BRUKERVARSEL",
             "SALESFORCE_CLIENT_ID" to "consumer-key",
             "SALESFORCE_USERNAME" to "integrasjon@nav.no",
             "SALESFORCE_PRIVATE_KEY" to "secret-key",
@@ -22,7 +23,8 @@ class SalesforceConfigTest {
     fun `reads all variables when enabled`() {
         val config = SalesforceConfig.fromEnv(env)!!
         assertEquals("https://test.salesforce.com", config.loginUrl)
-        assertEquals("/services/apexrest/foreldreansvar/v1", config.endpointPath)
+        assertEquals("62.0", config.apiVersion)
+        assertEquals("BRUKERVARSEL", config.threadType)
         assertEquals("consumer-key", config.clientId)
         assertEquals("integrasjon@nav.no", config.username)
         assertEquals("secret-key", config.privateKeyPem)
@@ -43,6 +45,30 @@ class SalesforceConfigTest {
     @Test
     fun `fails on an invalid SALESFORCE_ENABLED`() {
         assertThrows<IllegalStateException> { SalesforceConfig.fromEnv(env + ("SALESFORCE_ENABLED" to "ja")) }
+    }
+
+    @Test
+    fun `closing is off by default, and SALESFORCE_CLOSED_BY is then not needed`() {
+        val config = SalesforceConfig.fromEnv(env)!!
+        assertFalse(config.lukkEnabled)
+        assertNull(config.closedBy)
+    }
+
+    @Test
+    fun `closing needs SALESFORCE_CLOSED_BY`() {
+        val lukk = env + ("SALESFORCE_LUKK_ENABLED" to "true")
+        val e = assertThrows<IllegalStateException> { SalesforceConfig.fromEnv(lukk) }
+        assertTrue(e.message!!.contains("SALESFORCE_CLOSED_BY"))
+
+        val config = SalesforceConfig.fromEnv(lukk + ("SALESFORCE_CLOSED_BY" to "nks-foreldreansvar"))!!
+        assertTrue(config.lukkEnabled)
+        assertEquals("nks-foreldreansvar", config.closedBy)
+    }
+
+    @Test
+    fun `fails on an invalid SALESFORCE_LUKK_ENABLED or SALESFORCE_API_VERSION`() {
+        assertThrows<IllegalStateException> { SalesforceConfig.fromEnv(env + ("SALESFORCE_LUKK_ENABLED" to "ja")) }
+        assertThrows<IllegalStateException> { SalesforceConfig.fromEnv(env + ("SALESFORCE_API_VERSION" to "62")) }
     }
 
     @Test

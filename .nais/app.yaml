@@ -56,15 +56,27 @@ spec:
     # All four, so we can see in the logs what PDL sends for each kind of change.
     - name: LEESAH_ENDRINGSTYPER
       value: OPPRETTET,KORRIGERT,OPPHOERT,ANNULLERT
-    # Salesforce push (see the Salesforce section in the README). "false" = dry run: PDL lookups run, but we only log
-    # what we would send. Set to "true" once the connected app, the Apex endpoint and the secret below exist.
+    # Closing henvendelser (Thread__c) in Salesforce, see the Salesforce section in the README.
+    # "false" = PDL lookups run, but Salesforce is not called; we only log counts.
+    # Set to "true" once the connected app, the integration user and the secret below exist.
     - name: SALESFORCE_ENABLED
+      value: "false"
+    # "false" = find open threads and log what we would close, but change nothing in Salesforce.
+    # Set to "true" only when the team has confirmed what Salesforce automation runs when a thread is closed.
+    - name: SALESFORCE_LUKK_ENABLED
       value: "false"
     - name: SALESFORCE_LOGIN_URL
       value: https://test.salesforce.com
-    # Path of the Apex REST endpoint on the Salesforce instance. Placeholder until the endpoint exists.
-    - name: SALESFORCE_ENDPOINT_PATH
-      value: /services/apexrest/foreldreansvar/v1
+    # Salesforce REST API version. Placeholder: check which version the org supports.
+    - name: SALESFORCE_API_VERSION
+      value: "62.0"
+    # CRM_Thread_Type__c of the threads we may close. Placeholder: the team must confirm the value.
+    - name: SALESFORCE_THREAD_TYPE
+      value: TODO
+    # Written to CRM_Closed_By__c on closed threads. Placeholder: the team must confirm the value.
+    # Only required when SALESFORCE_LUKK_ENABLED is "true".
+    - name: SALESFORCE_CLOSED_BY
+      value: TODO
   # SALESFORCE_CLIENT_ID, SALESFORCE_USERNAME and SALESFORCE_PRIVATE_KEY. The secret is created manually in teamnks.
   # Commented out because Nais will not start the pod if the secret does not exist yet.
   # envFrom:

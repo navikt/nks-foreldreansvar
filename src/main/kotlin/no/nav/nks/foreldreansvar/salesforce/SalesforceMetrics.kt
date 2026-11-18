@@ -10,7 +10,7 @@ import io.micrometer.core.instrument.Timer
 
 /**
  * Times one HTTP call to Salesforce as `salesforce_requests_seconds{operation, outcome}`.
- * `operation`: `token` or `send`. `outcome`: `ok`, `unauthorized`, `client_error`, `server_error`, `timeout` or `error`.
+ * `operation`: `token`, `query` or `close`. `outcome`: `ok`, `unauthorized`, `client_error`, `server_error`, `timeout` or `error`.
  */
 internal suspend fun MeterRegistry.timeSalesforce(
     operation: String,

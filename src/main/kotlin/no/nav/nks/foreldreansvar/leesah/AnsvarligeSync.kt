@@ -8,33 +8,34 @@ import no.nav.nks.foreldreansvar.hentAnsvarlige
 import no.nav.nks.foreldreansvar.pdl.PdlClient
 import no.nav.nks.foreldreansvar.pdl.PdlException
 import no.nav.nks.foreldreansvar.salesforce.ForeldreansvarOppdatering
-import no.nav.nks.foreldreansvar.salesforce.OppdateringSender
+import no.nav.nks.foreldreansvar.salesforce.ThreadCloser
 import org.slf4j.LoggerFactory
 import java.time.Clock
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 /**
- * Keeps Salesforce in sync with PDL. Event = signal, PDL = truth: an event only tells us *which* child changed;
- * we then look up the child's full current state in PDL and send that.
+ * Closes parents' threads in Salesforce when they lose foreldreansvar. Event = signal, PDL = truth: an event only
+ * tells us *which* child changed; we then look up the child's full current state in PDL and close the threads of
+ * every parent who is no longer in it.
  *
  * Per poll: one lookup per child (several events for the same child give one lookup), then batches of
- * [OppdateringSender.MAX_BATCH_SIZE]. If anything fails we throw, and the consumer retries the whole poll without
- * committing. That is safe because each element is the full state, so sending it again changes nothing.
+ * [ThreadCloser.MAX_BATCH_SIZE]. If anything fails we throw, and the consumer retries the whole poll without
+ * committing. That is safe because closed threads are not found again, so a retry only closes what is still open.
  *
- * Counts each child as `foreldreansvar_sync_children_total{result, dry_run}` once its batches are accepted.
- * `result`: `with_ansvarlige`, `without_ansvarlige` (none, kode 6/7, or myndig) or `not_found` (not in PDL, sent as none).
+ * Counts each child as `foreldreansvar_sync_children_total{result, dry_run}` once its batches are handled.
+ * `result`: `with_ansvarlige`, `without_ansvarlige` (none, kode 6/7, or myndig) or `not_found` (not in PDL, handled as none).
  */
 class AnsvarligeSync(
     private val pdlClient: PdlClient,
-    private val sender: OppdateringSender,
+    private val threadCloser: ThreadCloser,
     private val meterRegistry: MeterRegistry = SimpleMeterRegistry(),
     private val clock: Clock = Clock.systemUTC(),
 ) : ForeldreansvarHendelseHandler {
     private val log = LoggerFactory.getLogger(AnsvarligeSync::class.java)
 
     // The consumer thread is not a coroutine, so we block it while we call PDL and Salesforce. That is what we want:
-    // the next poll must wait until this one is delivered.
+    // the next poll must wait until this one is done.
     override fun handle(hendelser: List<Personhendelse>) =
         runBlocking {
             val sisteHendelsePerBarn = sisteHendelsePerBarn(hendelser)
@@ -58,22 +59,22 @@ class AnsvarligeSync(
                         resultat to
                             ForeldreansvarOppdatering(barnIdent, ansvarlige.ansvarlige, hendelse.hendelseId, ansvarlige.hentetTidspunkt)
                     } catch (_: PdlException.NotFound) {
-                        // Fail closed: the ident no longer exists in PDL, so Salesforce should stop sharing for it.
+                        // Fail closed: the ident no longer exists in PDL, so no parent should keep threads open on it.
                         "not_found" to ForeldreansvarOppdatering(barnIdent, emptyList(), hendelse.hendelseId, naa())
                     }
                 }
             val oppdateringer = resultater.map { it.second }
             val ikkeFunnet = resultater.count { it.first == "not_found" }
-            if (ikkeFunnet > 0) log.info("{} children not found in PDL, sending them with no ansvarlige", ikkeFunnet)
+            if (ikkeFunnet > 0) log.info("{} children not found in PDL, handling them as having no ansvarlige", ikkeFunnet)
 
-            val batcher = oppdateringer.chunked(OppdateringSender.MAX_BATCH_SIZE)
+            val batcher = oppdateringer.chunked(ThreadCloser.MAX_BATCH_SIZE)
             batcher.forEach { batch ->
-                sender.send(batch)
+                threadCloser.closeThreads(batch)
                 batch.forEach {
                     log.info(
                         TEAM_LOGS,
-                        "Salesforce {}: barnIdent={} ansvarlige={} hendelseId={}",
-                        if (sender.dryRun) "dry run, not sent" else "sent",
+                        "Salesforce threads checked{}: barnIdent={} ansvarlige={} hendelseId={}",
+                        if (threadCloser.dryRun) " (dry run)" else "",
                         it.barnIdent,
                         it.ansvarlige.map { a -> "${a.ident}:${a.ansvar}" },
                         it.hendelseId,
@@ -82,7 +83,7 @@ class AnsvarligeSync(
             }
             resultater.groupingBy { it.first }.eachCount().forEach { (resultat, antall) ->
                 meterRegistry
-                    .counter("foreldreansvar.sync.children", "result", resultat, "dry_run", sender.dryRun.toString())
+                    .counter("foreldreansvar.sync.children", "result", resultat, "dry_run", threadCloser.dryRun.toString())
                     .increment(antall.toDouble())
             }
             log.info(
