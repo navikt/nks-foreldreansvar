@@ -107,6 +107,8 @@ Locally there is no PDL, so a valid ident gives `502`. Use the tests to see real
 
 `check` runs tests and Kotlin lint checks. Use `./gradlew formatKotlin` to format Kotlin sources.
 
+The **Test and lint** GitHub Actions workflow runs `check` on every pull request and push to `main`. It can also be started manually and does not deploy the app.
+
 ## Build an executable JAR
 
 ```sh
